@@ -38,6 +38,10 @@ export class SaveMessageDto {
   @IsNotEmpty()
   role!: MessageRole;
 
+  @IsString()
+  @IsOptional()
+  processed_content?: string;
+
   @IsOptional()
   json_data?: Record<string, unknown>;
 

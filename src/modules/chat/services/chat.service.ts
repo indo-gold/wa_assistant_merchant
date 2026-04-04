@@ -64,6 +64,7 @@ export class ChatService {
       wa_message_id: dto.wa_message_id || null,
       reply_wa_message_id: dto.reply_wa_message_id || null,
       message: dto.message,
+      processed_content: dto.processed_content || null,
       type: dto.type || MessageType.TEXT,
       role: dto.role,
       json_data: dto.json_data || null,
@@ -98,7 +99,9 @@ export class ChatService {
       .reverse()
       .map((chat) => ({
         role: chat.role as 'user' | 'assistant',
-        content: chat.message,
+        // Gunakan processed_content untuk LLM context jika tersedia,
+        // fallback ke message untuk tampilan UI biasa
+        content: chat.processed_content || chat.message,
       }));
   }
 
@@ -135,6 +138,19 @@ export class ChatService {
   ): Promise<void> {
     await this.chatHistoryModel.update(
       { json_data: jsonData },
+      { where: { wa_message_id: waMessageId } },
+    );
+  }
+
+  /**
+   * ==========================================================================
+   * MARK AS LLM READ
+   * ==========================================================================
+   * Tandai pesan sudah dibaca oleh LLM.
+   */
+  async markAsLlmRead(waMessageId: string): Promise<void> {
+    await this.chatHistoryModel.update(
+      { is_llm_read: 1 },
       { where: { wa_message_id: waMessageId } },
     );
   }

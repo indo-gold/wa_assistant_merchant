@@ -26,6 +26,13 @@ import {
 import { User } from './user.model';
 import { ModelAI } from './model-ai.model';
 
+export enum CostOperationType {
+  CHAT_COMPLETION = 'chat_completion',
+  VISION_ANALYSIS = 'vision_analysis',
+  AUDIO_TRANSCRIPTION = 'audio_transcription',
+  TOOL_EXECUTION = 'tool_execution',
+}
+
 @Table({
   tableName: 'cost',
   timestamps: false,
@@ -100,6 +107,11 @@ export class Cost extends Model {
   @AllowNull(true)
   @Column(DataType.INTEGER)
   agent_id!: number | null;
+
+  @AllowNull(false)
+  @Default(CostOperationType.CHAT_COMPLETION)
+  @Column(DataType.ENUM(...Object.values(CostOperationType)))
+  operation_type!: CostOperationType;
 
   @Default(DataType.NOW)
   @AllowNull(true)

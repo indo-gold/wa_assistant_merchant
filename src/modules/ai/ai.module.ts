@@ -34,11 +34,13 @@ import { CostTrackingService } from './services/cost-tracking.service';
 import { AiProviderFactory } from './services/ai-provider.factory';
 import { AiToolService } from './services/ai-tool.service';
 import { ToolRegistryService } from './services/tool-registry.service';
+import { VisionService } from './services/vision.service';
 import { WhatsappApiService } from '../whatsapp/services/whatsapp-api.service';
 import { ChatService } from '../chat/services/chat.service';
 import { ProductModule } from '../product/product.module';
 import { OrderModule } from '../order/order.module';
 import { ChatModule } from '../chat/chat.module';
+import { UserModule } from '../user/user.module';
 
 @Module({
   imports: [
@@ -61,9 +63,10 @@ import { ChatModule } from '../chat/chat.module';
     ProductModule,
     OrderModule,
     ChatModule,
+    UserModule,
     ConfigModule,
   ],
-  providers: [AiProviderFactory, AiOrchestratorService, CostTrackingService, AiToolService, ToolRegistryService, WhatsappApiService, ChatService],
-  exports: [AiProviderFactory, AiOrchestratorService, CostTrackingService, AiToolService, ToolRegistryService, WhatsappApiService, ChatService],
+  providers: [AiProviderFactory, AiOrchestratorService, CostTrackingService, AiToolService, ToolRegistryService, VisionService, WhatsappApiService, ChatService],
+  exports: [AiProviderFactory, AiOrchestratorService, CostTrackingService, AiToolService, ToolRegistryService, VisionService, WhatsappApiService, ChatService],
 })
 export class AiModule {}

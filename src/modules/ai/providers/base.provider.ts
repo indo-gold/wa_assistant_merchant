@@ -90,9 +90,9 @@ export abstract class BaseAiProvider {
   protected client: OpenAI;
   protected readonly name: string;
 
-  constructor(name: string, baseURL: string, apiKey: string) {
+  constructor(name: string, baseURL: string, apiKey: string, timeout: number = 30000) {
     this.name = name;
-    this.client = new OpenAI({ baseURL, apiKey });
+    this.client = new OpenAI({ baseURL, apiKey, timeout });
   }
 
   /**

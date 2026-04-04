@@ -32,8 +32,10 @@ import {
   ReminderProducts,
   AgentAI,
   StudioAI,
+  ModelAI,
   MessageRole,
   MessageType,
+  CostOperationType,
 } from '../../../database/models';
 import { KnowledgeBaseService } from '../../knowledge-base/services/knowledge-base.service';
 import { WhatsappApiService } from '../../whatsapp/services/whatsapp-api.service';
@@ -44,6 +46,7 @@ import { XenditService } from '../../order/services/xendit.service';
 import { ChatService } from '../../chat/services/chat.service';
 import { CostTrackingService } from './cost-tracking.service';
 import { AiProviderFactory } from './ai-provider.factory';
+import { KtpVerificationService } from '../../user/services/ktp-verification.service';
 
 export interface ToolContext {
   userPhone: string;
@@ -82,6 +85,8 @@ export class AiToolService {
     private readonly agentModel: typeof AgentAI,
     @InjectModel(StudioAI)
     private readonly studioModel: typeof StudioAI,
+    @InjectModel(ModelAI)
+    private readonly modelAiModel: typeof ModelAI,
     @InjectConnection()
     private readonly sequelize: Sequelize,
     private readonly knowledgeBaseService: KnowledgeBaseService,
@@ -92,7 +97,151 @@ export class AiToolService {
     private readonly chatService: ChatService,
     private readonly providerFactory: AiProviderFactory,
     private readonly costTracking: CostTrackingService,
+    private readonly ktpVerificationService: KtpVerificationService,
   ) {}
+
+  /**
+   * Extract common gold-related keywords from user request for fallback search.
+   */
+  private extractGoldKeywords(userRequest: string): string[] {
+    const keywords: string[] = [];
+    const normalized = userRequest.toLowerCase();
+
+    // Brand/Type keywords
+    if (normalized.includes('ubs')) keywords.push('UBS');
+    if (normalized.includes('antam')) keywords.push('Antam');
+    if (normalized.includes('lotus')) keywords.push('Lotus');
+    if (normalized.includes('king halim')) keywords.push('King Halim');
+    if (normalized.includes('emas')) keywords.push('Emas');
+    if (normalized.includes('perak')) keywords.push('Perak');
+    if (normalized.includes('lm')) keywords.push('LM');
+    if (normalized.includes('logam mulia')) keywords.push('Logam Mulia');
+
+    // Purity keywords
+    if (normalized.includes('9999') || normalized.includes('99.99')) keywords.push('9999', '99.99');
+    if (normalized.includes('916') || normalized.includes('91.6')) keywords.push('916', '91.6');
+    if (normalized.includes('375') || normalized.includes('37.5')) keywords.push('375', '37.5');
+
+    return keywords;
+  }
+
+  /**
+   * Parse quantity manual dari pesan user.
+   * Contoh: "1gr5keping" → 5, "ubs 1 gram 3 keping" → 3
+   */
+  private parseManualQuantity(normalizedMessage: string): number | null {
+    const qtyMatch = normalizedMessage.match(/(\d+)\s*(?:keping|pcs|biji|buah|lembar)/);
+    if (qtyMatch) {
+      return parseInt(qtyMatch[1], 10);
+    }
+    return null;
+  }
+
+  /**
+   * Ekstrak order manual dari pesan user menggunakan keyword matching.
+   * Return null jika tidak ada produk yang cocok.
+   */
+  private extractOrderManually(message: string, allProducts: any[]) {
+    const normalized = message
+      .toLowerCase()
+      .replace(/(\d)([a-zA-Z])/g, '$1 $2')
+      .replace(/([a-zA-Z])(\d)/g, '$1 $2');
+
+    const matches = allProducts.filter(
+      (p) =>
+        normalized.includes(p.product_name.toLowerCase()) ||
+        (p.variant_name && normalized.includes(p.variant_name.toLowerCase())),
+    );
+
+    if (matches.length === 0) return null;
+
+    // Pilih produk dengan match terpanjang (paling spesifik)
+    const bestProduct = matches.reduce((best, current) => {
+      const bestScore = best.product_name.length + (best.variant_name?.length || 0);
+      const currentScore = current.product_name.length + (current.variant_name?.length || 0);
+      return currentScore > bestScore ? current : best;
+    });
+
+    const denomMatch = normalized.match(/(\d+)\s*(?:gr|gram)/);
+    const qtyMatch = normalized.match(/(\d+)\s*(?:keping|pcs|biji|buah|lembar)/);
+    const requestedDenom = denomMatch ? parseInt(denomMatch[1], 10) : null;
+    const requestedQty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
+
+    let finalProduct = bestProduct;
+    if (requestedDenom) {
+      const exactDenom = matches.find((p: any) => p.denomination == requestedDenom);
+      if (exactDenom) finalProduct = exactDenom;
+    }
+
+    return [
+      {
+        product_name: finalProduct.product_name,
+        variant_name: finalProduct.variant_name || undefined,
+        denomination: requestedDenom || finalProduct.denomination,
+        quantity: requestedQty,
+      },
+    ];
+  }
+
+  /**
+   * ==========================================================================
+   * RESOLVE MODEL CONFIG
+   * ==========================================================================
+   * Resolve model name, model id, dan provider dari agent.
+   * Priority: hybrid_model_id -> model_id.
+   */
+  private async resolveModelConfig(agent: AgentAI | null): Promise<{
+    modelName: string;
+    modelId: number;
+    providerType: import('./ai-provider.factory').AiProviderType;
+  }> {
+    if (!agent) {
+      return { modelName: 'gpt-4o-mini', modelId: 0, providerType: 'openai' };
+    }
+
+    // 1. Coba hybrid model dulu
+    if (agent.hybrid_model_id) {
+      const hybridModel = await this.modelAiModel.findOne({
+        where: { id: agent.hybrid_model_id },
+        include: [
+          {
+            model: StudioAI,
+            where: { is_active: 'active' },
+            required: true,
+          },
+        ],
+      });
+      if (hybridModel?.studio) {
+        return {
+          modelName: hybridModel.model,
+          modelId: hybridModel.id,
+          providerType: this.mapStudioToProvider(hybridModel.studio.studio),
+        };
+      }
+    }
+
+    // 2. Fallback ke main model
+    const mainModel = await this.modelAiModel.findOne({
+      where: { id: agent.model_id },
+      include: [
+        {
+          model: StudioAI,
+          where: { is_used: '1' },
+          required: true,
+        },
+      ],
+    });
+
+    if (mainModel?.studio) {
+      return {
+        modelName: mainModel.model,
+        modelId: mainModel.id,
+        providerType: this.mapStudioToProvider(mainModel.studio.studio),
+      };
+    }
+
+    return { modelName: 'gpt-4o-mini', modelId: 0, providerType: 'openai' };
+  }
 
   /**
    * ==========================================================================
@@ -115,21 +264,17 @@ export class AiToolService {
    */
   private async callAI(
     request: CompletionRequest,
-    agentName: string,
+    agent: AgentAI | null,
     userId: number,
     waMessageId: string,
     toolSuffix: string = '',
   ): Promise<any> {
-    const studio = await this.studioModel.findOne({ where: { is_used: '1' } });
-    if (!studio) throw new Error('No active studio');
-
-    const providerType = this.mapStudioToProvider(studio.studio);
-    const provider = this.providerFactory.getProvider(providerType);
+    const modelConfig = await this.resolveModelConfig(agent);
+    const provider = this.providerFactory.getProvider(modelConfig.providerType);
 
     const startTime = Date.now();
     const completion = await provider.createCompletion(request);
 
-    const agent = await this.getAgent(agentName);
     const costTrackingMessageId = toolSuffix ? `${waMessageId}_${toolSuffix}` : waMessageId;
 
     await this.costTracking.trackCost(
@@ -139,6 +284,8 @@ export class AiToolService {
       costTrackingMessageId,
       request.messages,
       Date.now() - startTime,
+      modelConfig.modelId,
+      CostOperationType.TOOL_EXECUTION,
     );
 
     return completion;
@@ -212,11 +359,11 @@ ${sourceKnowledgeBase}`,
 
       const completion = await this.callAI(
         {
-          model: agent.model,
+          model: (await this.resolveModelConfig(agent)).modelName,
           messages,
           ...parameters,
         },
-        'Agent Cari Pengetahuan Dasar',
+        agent,
         context.userId,
         context.messageId,
         'kb',
@@ -313,11 +460,11 @@ ${agent?.instruction || ''}`,
 
       const completion = await this.callAI(
         {
-          model: agent?.model || 'gpt-4o-mini',
+          model: (await this.resolveModelConfig(agent)).modelName,
           messages,
           ...parameters,
         },
-        'Agent Menampilkan List Product',
+        agent,
         context.userId,
         context.messageId,
         'gold_list',
@@ -327,20 +474,56 @@ ${agent?.instruction || ''}`,
       query = query
         .replace(/```sql/g, '')
         .replace(/```/g, '')
-        .trim()
-        .replace(/^\(|\)$/g, '')
+        .replace(/\n/g, ' ')
         .trim();
+
+      // Hanya hapus tanda kurung luar jika seluruh query di-wrap dalam SATU pasang ()
+      // Contoh: "(SELECT ... UNION ALL SELECT ...)" → "SELECT ... UNION ALL SELECT ..."
+      if (query.startsWith('(') && query.endsWith(')')) {
+        let openCount = 0;
+        let isWrapped = false;
+        for (let i = 0; i < query.length; i++) {
+          if (query[i] === '(') openCount++;
+          else if (query[i] === ')') openCount--;
+
+          // Jika counter kembali ke 0 sebelum akhir string, berarti ada multiple ()
+          if (openCount === 0 && i < query.length - 1) {
+            isWrapped = false;
+            break;
+          }
+          if (openCount === 0 && i === query.length - 1) {
+            isWrapped = true;
+          }
+        }
+        if (isWrapped) {
+          query = query.slice(1, -1).trim();
+        }
+      }
 
       let results: Product[] = [];
 
       try {
-        if (query.toLowerCase().startsWith('select')) {
+        const normalizedQuery = query.replace(/\s+/g, ' ').trim().toLowerCase();
+        const isSelectQuery =
+          normalizedQuery.startsWith('select') ||
+          normalizedQuery.startsWith('(select') ||
+          normalizedQuery.startsWith('with') ||
+          normalizedQuery.startsWith('(with');
+
+        if (isSelectQuery) {
+          this.logger.log(`Executing gold price query: ${query.substring(0, 200)}...`);
           const [queryResults] = (await this.productModel.sequelize?.query(query)) || [[]];
           results = queryResults as Product[];
+          this.logger.log(`Gold price query returned ${results.length} rows`);
         } else {
           throw new Error('Not a valid SQL query');
         }
       } catch (error) {
+        this.logger.warn(`Gold price query failed: ${(error as Error).message}. Falling back to default search.`);
+      }
+
+      // Fallback 1: default search with user request
+      if (results.length === 0) {
         results = await this.productModel.findAll({
           where: {
             max_quantity: { [Op.gt]: 0 },
@@ -351,6 +534,44 @@ ${agent?.instruction || ''}`,
           },
           limit: 20,
         });
+        this.logger.log(`Fallback 1 (default search) returned ${results.length} rows`);
+      }
+
+      // Fallback 2: keyword-based search for common gold terms
+      if (results.length === 0) {
+        const keywords = this.extractGoldKeywords(userRequest);
+        if (keywords.length > 0) {
+          results = await this.productModel.findAll({
+            where: {
+              max_quantity: { [Op.gt]: 0 },
+              [Op.or]: keywords.map((kw) => ({
+                [Op.or]: [
+                  { product_name: { [Op.like]: `%${kw}%` } },
+                  { variant_name: { [Op.like]: `%${kw}%` } },
+                ],
+              })),
+            },
+            limit: 20,
+          });
+          this.logger.log(`Fallback 2 (keyword search: ${keywords.join(', ')}) returned ${results.length} rows`);
+        }
+      }
+
+      // Fallback 3: return all gold products with stock
+      if (results.length === 0) {
+        results = await this.productModel.findAll({
+          where: {
+            max_quantity: { [Op.gt]: 0 },
+            [Op.or]: [
+              { product_name: { [Op.like]: '%Emas%' } },
+              { product_name: { [Op.like]: '%LM%' } },
+              { product_name: { [Op.like]: '%UBS%' } },
+              { product_name: { [Op.like]: '%Perak%' } },
+            ],
+          },
+          limit: 20,
+        });
+        this.logger.log(`Fallback 3 (all gold products) returned ${results.length} rows`);
       }
 
       const priceList = results.map((p) => ({
@@ -360,10 +581,18 @@ ${agent?.instruction || ''}`,
         available: p.max_quantity > 0,
       }));
 
+      if (priceList.length === 0) {
+        return {
+          success: true,
+          data: [],
+          message: `Saat ini tidak ada produk yang tersedia untuk "${userRequest}". Silakan coba kata kunci lain atau tanyakan produk lainnya.`,
+        };
+      }
+
       return {
         success: true,
         data: priceList,
-        message: `Ditemukan ${priceList.length} produk untuk "${userRequest}"`,
+        message: `Ditemukan ${priceList.length} produk untuk "${userRequest}":\n${priceList.map((p, i) => `${i + 1}. ${p.name} - ${p.denomination}g - Rp ${p.price.toLocaleString('id-ID')}`).join('\n')}`,
       };
     } catch (error) {
       this.logger.error(`Get AI show gold price error: ${(error as Error).message}`);
@@ -411,11 +640,11 @@ Data Produk:\n${JSON.stringify(products, null, 2)}`,
 
         const completion = await this.callAI(
           {
-            model: agent.model,
+            model: (await this.resolveModelConfig(agent)).modelName,
             messages,
             ...parameters,
           },
-          'Agent Menampilkan Varian',
+          agent,
           context.userId,
           context.messageId,
           'gold_variant',
@@ -480,11 +709,11 @@ Data Produk:\n${JSON.stringify(products, null, 2)}`,
 
         const completion = await this.callAI(
           {
-            model: agent.model,
+            model: (await this.resolveModelConfig(agent)).modelName,
             messages,
             ...parameters,
           },
-          'Agent Menampilkan Gambar',
+          agent,
           context.userId,
           context.messageId,
           'gold_image',
@@ -567,11 +796,11 @@ Available Products: ${JSON.stringify(products.map((p) => ({ name: `${p.product_n
 
         const completion = await this.callAI(
           {
-            model: agent.model,
+            model: (await this.resolveModelConfig(agent)).modelName,
             messages,
             ...parameters,
           },
-          'Agent Budget',
+          agent,
           context.userId,
           context.messageId,
           'budget',
@@ -611,9 +840,10 @@ Available Products: ${JSON.stringify(products.map((p) => ({ name: `${p.product_n
     try {
       this.logger.log('Processing order with AI extraction using agent instruction');
 
-      // 1. Ambil history chat terlebih dahulu (5 pesan terakhir)
-      const chatHistory = await this.chatService.getConversationHistory(context.userId, 5);
-      this.logger.log(`Retrieved ${chatHistory.length} messages from history`);
+      // 1. Gunakan conversation history dari context (sudah include pesan user terakhir)
+      // JANGAN pakai getConversationHistory dari DB karena pesan terakhir belum is_llm_read=1
+      const chatHistory = context.conversationHistory || [];
+      this.logger.log(`Using ${chatHistory.length} messages from context conversation history`);
 
       // 2. Ambil Agent dan Instruksi dari database
       const agent = await this.getAgent('Agent Rincian Pesanan');
@@ -636,9 +866,45 @@ Available Products: ${JSON.stringify(products.map((p) => ({ name: `${p.product_n
 
       const parameters = agent?.parameters ? JSON.parse(agent.parameters) : {};
 
-      // Build system prompt dengan instruksi dari database
-      const systemPrompt = ` 
-${agent.instruction}
+      // Identifikasi pesan terakhir
+      const lastUserMessage = [...chatHistory].reverse().find((h) => h.role === 'user')?.content || '';
+
+      let extractedProducts: Array<{
+        product_name: string;
+        variant_name?: string;
+        denomination: number;
+        quantity: number;
+      }> = [];
+
+      // ==========================================================
+      // PRIMARY: Manual keyword extraction (lebih akurat & murah)
+      // ==========================================================
+      const manualExtracted = this.extractOrderManually(lastUserMessage, allProducts);
+      if (manualExtracted) {
+        this.logger.log(`Manual extraction found products: ${JSON.stringify(manualExtracted)}`);
+        extractedProducts = manualExtracted;
+      } else {
+        // ==========================================================
+        // FALLBACK: AI extraction untuk pesan kompleks/ambiguous
+        // ==========================================================
+        this.logger.log('Manual extraction failed, falling back to AI extraction');
+
+        const isChangeRequest = /\b(ganti|ubah|gantiin|ganti jadi|ubah jadi|jadi)\b/i.test(lastUserMessage);
+        const normalizedLastMessage = lastUserMessage
+          .toLowerCase()
+          .replace(/(\d)([a-zA-Z])/g, '$1 $2')
+          .replace(/([a-zA-Z])(\d)/g, '$1 $2');
+
+        const systemPrompt = `
+Kamu adalah ekstraktor pesanan emas. Tugasmu adalah mengidentifikasi produk emas dari percakapan user, bahkan jika ada typo atau spasi yang hilang.
+Contoh normalisasi:
+- "1gr5keping" → "1 gr 5 keping"
+- "ubs1gram" → "ubs 1 gram"
+- "antam2gr" → "antam 2 gr"
+Selalu cocokkan nama produk dengan "Data Produk Tersedia" di bawah. Jika user tidak menyebutkan variant, kosongkan variant_name. Jika user tidak menyebutkan quantity, default 1.
+${isChangeRequest ? '\nPERHATIAN: User ingin MENGUBAH pesanan sebelumnya. Gunakan HANYA pesan terakhir dari user untuk ekstrak produk dan quantity. Abaikan semua pesan dan quantity sebelumnya.\n' : ''}
+
+${agent.instruction || ''}
 
 Data Produk Tersedia (untuk referensi):
 ${JSON.stringify(
@@ -650,75 +916,77 @@ ${JSON.stringify(
   })),
 )}`;
 
-      // Build conversation untuk AI ekstraksi
-      const extractionMessages: ChatMessage[] = [
-        { role: 'system', content: systemPrompt },
-        ...chatHistory.map((h) => ({ role: h.role as any, content: h.content })),
-        {
-          role: 'user',
-          content:
-            'Ekstrak produk yang ingin saya beli dari percakapan di atas dan kembalikan dalam format JSON sesuai instruksi.',
-        },
-      ];
+        const extractionMessages: ChatMessage[] = [
+          { role: 'system', content: systemPrompt },
+          ...chatHistory.map((h) => ({ role: h.role as any, content: h.content })),
+          {
+            role: 'user',
+            content: isChangeRequest
+              ? `PESAN TERBARU INI ADALAH YANG PALING VALID: "${lastUserMessage}". Ekstrak HANYA dari pesan ini, abaikan semua pesan sebelumnya.`
+              : 'Ekstrak produk yang ingin saya beli dari percakapan di atas dan kembalikan dalam format JSON sesuai instruksi.',
+          },
+        ];
 
-      const extractionCompletion = await this.callAI(
-        {
-          model: agent?.model || 'gpt-4o-mini',
-          messages: extractionMessages,
-          response_format: { type: 'json_object' }, // Force JSON output
-          ...parameters,
-        },
-        'Agent Rincian Pesanan',
-        context.userId,
-        context.messageId,
-        'extract',
-      );
+        const extractionCompletion = await this.callAI(
+          {
+            model: (await this.resolveModelConfig(agent)).modelName,
+            messages: extractionMessages,
+            response_format: { type: 'json_object' },
+            ...parameters,
+          },
+          agent,
+          context.userId,
+          context.messageId,
+          'extract',
+        );
 
-      let extractedProducts: Array<{
-        product_name: string;
-        variant_name?: string;
-        denomination: number;
-        quantity: number;
-      }> = [];
+        try {
+          const aiResponse = extractionCompletion.choices[0]?.message?.content || '';
+          this.logger.debug(`AI raw response: ${aiResponse}`);
 
-      try {
-        const aiResponse = extractionCompletion.choices[0]?.message?.content || '';
-        this.logger.debug(`AI raw response: ${aiResponse}`);
+          const parsedResponse = JSON.parse(aiResponse);
 
-        // Parse JSON response
-        const parsedResponse = JSON.parse(aiResponse);
+          if (parsedResponse.products && Array.isArray(parsedResponse.products)) {
+            extractedProducts = parsedResponse.products;
+          } else if (Array.isArray(parsedResponse)) {
+            extractedProducts = parsedResponse;
+          }
 
-        // Handle struktur { products: [...] } atau direct array
-        if (parsedResponse.products && Array.isArray(parsedResponse.products)) {
-          extractedProducts = parsedResponse.products;
-        } else if (Array.isArray(parsedResponse)) {
-          extractedProducts = parsedResponse;
+          extractedProducts = extractedProducts
+            .map((p) => ({
+              product_name: p.product_name || '',
+              variant_name: p.variant_name || undefined,
+              denomination: p.denomination || 0,
+              quantity: p.quantity || 1,
+            }))
+            .filter((p) => p.product_name);
+
+          this.logger.log(`AI extracted products: ${JSON.stringify(extractedProducts)}`);
+
+          const manualQty = this.parseManualQuantity(normalizedLastMessage);
+          if (manualQty !== null && extractedProducts.length > 0) {
+            const aiQty = extractedProducts[0]?.quantity || 1;
+            if (aiQty !== manualQty) {
+              this.logger.log(
+                `Overriding AI quantity ${aiQty} with manual parse quantity ${manualQty}`,
+              );
+              extractedProducts = extractedProducts.map((p) => ({ ...p, quantity: manualQty }));
+            }
+          }
+        } catch (parseError) {
+          this.logger.warn(`Failed to parse AI extraction: ${(parseError as Error).message}`);
+          extractedProducts = [];
         }
-
-        // Normalisasi data - convert null ke undefined untuk variant_name
-        extractedProducts = extractedProducts
-          .map((p) => ({
-            product_name: p.product_name || '',
-            variant_name: p.variant_name || undefined,
-            denomination: p.denomination || 0,
-            quantity: p.quantity || 1,
-          }))
-          .filter((p) => p.product_name); // Filter yang tidak punya nama
-
-        this.logger.log(`AI extracted products: ${JSON.stringify(extractedProducts)}`);
-      } catch (parseError) {
-        this.logger.warn(`Failed to parse AI extraction: ${(parseError as Error).message}`);
-        // Fallback ke _products jika AI gagal
-        extractedProducts = null;
       }
 
-      if (extractedProducts.length === 0) {
+      // Kalau masih kosong, jangan kirim error kaku langsung ke WA. Biarkan LLM utama yang respon.
+      if (!extractedProducts || extractedProducts.length === 0) {
         return {
           success: false,
           data: null,
           message:
-            'Maaf, saya tidak bisa mengidentifikasi produk yang Anda maksud dari percakapan. Silakan sebutkan produk dengan lebih jelas.',
-          skipLLM: true,
+            'Pesanan user tidak bisa saya identifikasi dengan pasti. Mohon bantu tanyakan kembali produk apa yang dimaksud dengan format yang lebih jelas (contoh: "Pesan UBS 1gr 5 keping").',
+          skipLLM: false,
         };
       }
 
@@ -785,27 +1053,72 @@ ${JSON.stringify(
         }
       }
 
+      // Cek apakah sudah ada cart pending terbaru dalam 10 menit terakhir
+      // untuk menghindari duplikasi cart saat user mengirim pesan lanjutan
+      const recentPendingCart = await this.cartModel.findOne({
+        where: {
+          user_id: context.userId,
+          status_order: CartStatus.PENDING,
+        },
+        order: [['timestamp', 'DESC']],
+      });
+
+      const TEN_MINUTES = 10 * 60 * 1000;
+      const isRecentCart =
+        recentPendingCart &&
+        new Date().getTime() - new Date(recentPendingCart.timestamp).getTime() < TEN_MINUTES;
+
       // 2. Jika ada valid products, create cart dan kirim WA langsung
       if (validatedProducts.length > 0) {
-        const cart = await this.cartService.createCart({
-          user_id: context.userId,
-          products: validatedProducts.map((p) => ({
-            product_id: p.product_id!,
-            product_name: p.actual_product_name!,
-            variant_id: 0,
-            variant_name: p.actual_variant_name || '',
-            quantity: p.quantity,
-            denomination: p.denomination,
-            max_quantity: 100,
-            price: p.price!,
-            discount_price: 0,
-            is_po: 0,
-            automatic_po: 0,
-            est_date_po: 0,
-            stock_po: 0,
-          })),
-          wa_message_id: context.messageId,
-        });
+        let cart;
+        if (isRecentCart) {
+          this.logger.log(`Reusing recent pending cart ${recentPendingCart.id} instead of creating new cart`);
+          // Update cart yang sudah ada dengan produk baru
+          await this.cartModel.update(
+            {
+              products: JSON.stringify(
+                validatedProducts.map((p) => ({
+                  product_id: p.product_id!,
+                  product_name: p.actual_product_name!,
+                  variant_id: 0,
+                  variant_name: p.actual_variant_name || '',
+                  quantity: p.quantity,
+                  denomination: p.denomination,
+                  max_quantity: 100,
+                  price: p.price!,
+                  discount_price: 0,
+                  is_po: 0,
+                  automatic_po: 0,
+                  est_date_po: 0,
+                  stock_po: 0,
+                })),
+              ),
+              wa_message_id: context.messageId,
+            },
+            { where: { id: recentPendingCart.id } },
+          );
+          cart = await this.cartModel.findByPk(recentPendingCart.id);
+        } else {
+          cart = await this.cartService.createCart({
+            user_id: context.userId,
+            products: validatedProducts.map((p) => ({
+              product_id: p.product_id!,
+              product_name: p.actual_product_name!,
+              variant_id: 0,
+              variant_name: p.actual_variant_name || '',
+              quantity: p.quantity,
+              denomination: p.denomination,
+              max_quantity: 100,
+              price: p.price!,
+              discount_price: 0,
+              is_po: 0,
+              automatic_po: 0,
+              est_date_po: 0,
+              stock_po: 0,
+            })),
+            wa_message_id: context.messageId,
+          });
+        }
 
         // Format dan kirim pesan rincian ke WhatsApp
         const message = this.formatOrderDetailMessage(validatedProducts);
@@ -1076,6 +1389,37 @@ ${JSON.stringify(
             success: false,
             data: null,
             message: 'Tidak ada keranjang aktif. Silakan buat pesanan baru.',
+          };
+        }
+
+        // HARD GATE: Cek KTP verifikasi sebelum lanjut ke pembayaran
+        const ktpVerification = await this.ktpVerificationService.findByUser(context.userId);
+        this.logger.log(
+          `KTP check for user ${context.userId}: ${ktpVerification ? 'found (id=' + ktpVerification.id + ')' : 'NOT FOUND'}`
+        );
+        if (!ktpVerification) {
+          const ktpMessage =
+            'Sebelum melanjutkan ke pembayaran, mohon kirimkan foto KTP Anda terlebih dahulu ya. Setelah KTP terverifikasi, saya akan langsung mengirimkan link pembayarannya.';
+
+          const response = await this.whatsappApi.sendMessage({
+            type: 'text',
+            to: context.userPhone,
+            data: { text: ktpMessage },
+          });
+
+          await this.chatService.saveMessage({
+            user_id: context.userId,
+            wa_message_id: response.messages[0]?.id,
+            message: ktpMessage,
+            role: MessageRole.ASSISTANT,
+            type: MessageType.TEXT,
+          });
+
+          return {
+            success: false,
+            data: null,
+            message: ktpMessage,
+            skipLLM: true,
           };
         }
 

@@ -22,14 +22,19 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { WhatsappApiService } from '../../whatsapp/services/whatsapp-api.service';
 import { AiOrchestratorService } from '../../ai/services/ai-orchestrator.service';
+import { AiProviderFactory } from '../../ai/services/ai-provider.factory';
 import { ToolRegistryService } from '../../ai/services/tool-registry.service';
-import { ToolContext } from '../../ai/entities/tool.entity';
 import { UserService, UserWithInfo } from '../../user/services/user.service';
 import { MessageType, MessageRole } from '../../../database/models';
 import { MediaService } from '../../media/services/media.service';
 import { ChatService } from '../../chat/services/chat.service';
 import { ChatMessage } from '../../ai/providers/base.provider';
+import { ToolContext } from '../../ai/entities/tool.entity';
 import { WhatsAppMessage } from '../dto/meta-webhook.dto';
+import { VisionService } from '../../ai/services/vision.service';
+import { KtpVerificationService } from '../../user/services/ktp-verification.service';
+import { CostTrackingService } from '../../ai/services/cost-tracking.service';
+
 
 export interface ProcessMessageResult {
   success: boolean;
@@ -49,6 +54,10 @@ export class MessageProcessorService {
     private readonly toolRegistry: ToolRegistryService,
     private readonly whatsappApi: WhatsappApiService,
     private readonly mediaService: MediaService,
+    private readonly providerFactory: AiProviderFactory,
+    private readonly visionService: VisionService,
+    private readonly ktpVerificationService: KtpVerificationService,
+    private readonly costTracking: CostTrackingService,
   ) {
     // Cleanup processed IDs setiap 5 menit
     setInterval(
@@ -98,6 +107,7 @@ export class MessageProcessorService {
 
       // 6. Process berdasarkan message type
       let messageBody: string;
+      let processedContent: string | undefined;
 
       switch (messageType) {
         case 'text':
@@ -108,13 +118,45 @@ export class MessageProcessorService {
           if (message.image) {
             const media = await this.whatsappApi.downloadMedia(message.image.id);
             if (media) {
-              await this.mediaService.saveFromBuffer(
+              const fileInfo = await this.mediaService.saveFromBuffer(
                 media.buffer,
                 'image',
                 media.fileName || 'image.jpg',
               );
 
-              messageBody = `Pesan gambar: ${message.image.caption || ''}`;
+              // UI display: caption atau placeholder
+              messageBody = message.image.caption || '[Pesan gambar]';
+
+              // Vision analysis untuk deteksi KTP / deskripsi gambar
+              try {
+                const visionResult = await this.visionService.analyzeImage(
+                  media.buffer,
+                  message.id,
+                  user.id,
+                );
+
+                if (visionResult.is_ktp && visionResult.ktp_data) {
+                  await this.ktpVerificationService.save(
+                    user.id,
+                    visionResult.ktp_data,
+                    fileInfo.url,
+                    visionResult.ktp_data as Record<string, unknown>,
+                  );
+
+                  const ktp = visionResult.ktp_data;
+                  processedContent = `User mengirim KTP. NIK: ${ktp.nik || '-'}, Nama: ${ktp.nama || '-'}, Alamat: ${ktp.alamat || '-'}.`;
+                } else {
+                  processedContent = `User mengirim gambar. Deskripsi: ${visionResult.description}`;
+                  if (message.image.caption) {
+                    processedContent += ` (Caption: ${message.image.caption})`;
+                  }
+                }
+              } catch (err) {
+                this.logger.error(
+                  `Vision analysis failed: ${(err as Error).message}`,
+                );
+                processedContent = `Pesan gambar: ${message.image.caption || ''}`;
+              }
             }
           }
           break;
@@ -129,7 +171,35 @@ export class MessageProcessorService {
                 media.fileName || 'audio.ogg',
               );
 
+              // UI display: placeholder audio
               messageBody = '[Pesan audio]';
+
+              // Transkripsi pakai OpenAI Whisper-1
+              try {
+                const openai = this.providerFactory.getProvider('openai');
+                const transcriptionStart = Date.now();
+                const transcription = await openai.createTranscription(
+                  media.buffer,
+                  'whisper-1',
+                );
+                processedContent = transcription || '[Pesan audio kosong]';
+                this.logger.log(
+                  `Audio transcribed: "${processedContent.substring(0, 100)}..."`,
+                );
+
+                // Track Whisper transcription cost
+                await this.costTracking.trackAudioTranscriptionCost(
+                  user.id,
+                  message.id,
+                  media.buffer,
+                  Date.now() - transcriptionStart,
+                );
+              } catch (err) {
+                this.logger.error(
+                  `Whisper transcription failed: ${(err as Error).message}`,
+                );
+                processedContent = '[Pesan audio]';
+              }
             }
           }
           break;
@@ -156,15 +226,17 @@ export class MessageProcessorService {
           messageBody = `[${messageType} message]`;
       }
 
-      // 7. Save user message
+      // 7. Save user message (belum dibaca LLM, akan di-mark setelah AI process)
       await this.chatService.saveMessage({
         user_id: user.id,
         wa_message_id: message.id,
         reply_wa_message_id: message.context?.id,
         message: messageBody,
+        processed_content: processedContent,
         type: this.mapMessageType(messageType),
         role: MessageRole.USER,
         json_data: message as unknown as Record<string, unknown>,
+        is_llm_read: 0,
       });
 
       // 8. Check if bot should respond
@@ -184,11 +256,49 @@ export class MessageProcessorService {
       }
 
       // 10. Buffer message dan process
-      const combinedMessage = await this.chatService.bufferMessage(waId, messageBody, profile.name);
+      // Untuk AI context, gunakan processed_content jika tersedia (audio/image)
+      const aiMessageBody = processedContent || messageBody;
+      const combinedMessage = await this.chatService.bufferMessage(waId, aiMessageBody, profile.name);
 
-      // 11. Build messages untuk AI
-      // 11. Build messages untuk AI
-      const messages: ChatMessage[] = [{ role: 'user', content: combinedMessage }];
+      // 11. Ambil conversation history (max 5 pesan terakhir)
+      const conversationHistory = await this.chatService.getConversationHistory(user.id, 5);
+
+      // 11.5. Special handling untuk tombol interactive Lanjut/Tidak
+      // Bypass AI Utama dan langsung eksekusi get_user_confirm_buy
+      if (
+        messageType === 'interactive' &&
+        (messageBody === 'Lanjut' || messageBody === 'Tidak') &&
+        message.context?.id
+      ) {
+        this.logger.log(`Direct handling for interactive button: ${messageBody}`);
+        const toolResult = await this.toolRegistry.executeTool(
+          'get_user_confirm_buy',
+          { user_answer: messageBody },
+          {
+            userPhone: waId,
+            userName: profile.name,
+            userId: user.id,
+            messageId: message.id,
+            replyMessageId: message.context.id,
+            conversationHistory: conversationHistory.map((h) => ({
+              role: h.role,
+              content: h.content,
+            })),
+          } as ToolContext,
+        );
+
+        if (toolResult.skipLLM) {
+          this.logger.log('Tool get_user_confirm_buy handled directly, skipping AI');
+          return { success: true, response: toolResult.message };
+        }
+        // Jika skipLLM false, lanjut ke AI Utama untuk natural response
+      }
+
+      // 12. Build messages untuk AI dengan history context
+      const messages: ChatMessage[] = [
+        ...conversationHistory.map((h) => ({ role: h.role as 'user' | 'assistant', content: h.content })),
+        { role: 'user', content: combinedMessage },
+      ];
 
       // 13. Process dengan AI
       const aiResponse = await this.aiOrchestrator.processMessage('AI Utama', messages, {
@@ -199,7 +309,7 @@ export class MessageProcessorService {
         replyMessageId: message.context?.id,
       });
 
-      // 14. Handle tool calls jika ada
+      // 13. Handle tool calls jika ada
       let finalResponse = aiResponse.content;
       let waAlreadySent = false; // Flag untuk menandai WA sudah dikirim oleh tool
 
@@ -238,7 +348,9 @@ export class MessageProcessorService {
           // Tool sudah kirim WA langsung, tidak perlu kirim lagi
           waAlreadySent = true;
           finalResponse = skipLLMTool.content;
-          this.logger.log(`Tool handled directly and sent WA, skipping LLM and WA send: ${finalResponse}`);
+          this.logger.log(
+            `Tool handled directly and sent WA, skipping LLM and WA send: ${finalResponse}`,
+          );
         } else {
           // Get natural response dengan tool results
           const naturalResponse = await this.aiOrchestrator.getNaturalResponse(
@@ -278,20 +390,21 @@ export class MessageProcessorService {
           this.logger.error(`Failed to send message: ${(error as Error).message}`);
           return { success: false, error: (error as Error).message };
         }
+
+        // 16. Save AI response (hanya kalau belum dikirim oleh tool)
+        await this.chatService.saveMessage({
+          user_id: user.id,
+          wa_message_id: sentMessage.messages[0]?.id,
+          message: finalResponse,
+          type: MessageType.TEXT,
+          role: MessageRole.ASSISTANT,
+        });
       } else {
-        this.logger.log('WA already sent by tool, skipping sendMessage');
-        // Buat dummy sentMessage untuk keperluan saveMessage
-        sentMessage = { messages: [{ id: 'tool-sent' }] };
+        this.logger.log('WA already sent by tool, skipping sendMessage and saveMessage');
       }
 
-      // 16. Save AI response
-      await this.chatService.saveMessage({
-        user_id: user.id,
-        wa_message_id: sentMessage.messages[0]?.id,
-        message: finalResponse,
-        type: MessageType.TEXT,
-        role: MessageRole.ASSISTANT,
-      });
+      // Mark user message as LLM read
+      await this.chatService.markAsLlmRead(message.id);
 
       return { success: true, response: finalResponse };
     } catch (error) {
@@ -309,7 +422,15 @@ export class MessageProcessorService {
   private async executeTools(
     toolCalls: Array<{ id?: string; name: string; arguments: Record<string, unknown> }>,
     context: ToolContext,
-  ): Promise<Array<{ role: string; content: string; tool_call_id?: string; tool_name?: string; skipLLM?: boolean }>> {
+  ): Promise<
+    Array<{
+      role: string;
+      content: string;
+      tool_call_id?: string;
+      tool_name?: string;
+      skipLLM?: boolean;
+    }>
+  > {
     const results: Array<{
       role: string;
       content: string;

@@ -46,6 +46,7 @@ import {
   WebhookRequest,
   OrderPayment,
   OrderOtp,
+  KtpVerification,
 } from './database/models';
 import { TemplateMessageModule } from './modules/template-message/template-message.module';
 import { KnowledgeBaseModule } from './modules/knowledge-base/knowledge-base.module';
@@ -111,6 +112,7 @@ import { allConfigs } from './config/app.config';
       WebhookRequest,
       OrderPayment,
       OrderOtp,
+      KtpVerification,
     ]),
 
     // 3. Logger

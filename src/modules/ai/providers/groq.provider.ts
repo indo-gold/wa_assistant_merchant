@@ -24,15 +24,39 @@ export class GroqProvider extends BaseAiProvider {
 
   async createCompletion(request: CompletionRequest): Promise<CompletionResponse> {
     try {
-      const response = await this.client.chat.completions.create({
+      const body: any = {
         model: request.model,
         messages: request.messages as any,
         temperature: request.temperature,
         max_tokens: request.max_tokens,
-        response_format: request.response_format as any,
-        tools: request.tools as any,
-        tool_choice: request.tool_choice as any,
-      });
+      };
+
+      if (request.response_format) {
+        body.response_format = request.response_format;
+      }
+
+      // Detect if conversation history contains tool_calls or tool messages
+      const hasToolContext = request.messages.some(
+        (m: any) => m.role === 'tool' || m.tool_calls?.length > 0,
+      );
+
+      if (request.tools && request.tools.length > 0) {
+        body.tools = request.tools;
+      }
+
+      // Groq API defaults tool_choice to 'none' in some cases, which causes
+      // 400 errors when the model tries to call a tool. We must explicitly
+      // set tool_choice to 'auto' whenever tools are present OR when the
+      // conversation history contains tool context.
+      if (request.tools?.length > 0 || hasToolContext) {
+        if (request.tool_choice && request.tool_choice !== 'none') {
+          body.tool_choice = request.tool_choice;
+        } else {
+          body.tool_choice = 'auto';
+        }
+      }
+
+      const response = await this.client.chat.completions.create(body);
 
       return this.mapResponse(response);
     } catch (error) {

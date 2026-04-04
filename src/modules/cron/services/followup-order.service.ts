@@ -60,7 +60,7 @@ export class FollowupOrderService {
         where: {
           payment_status: 'pending',
           follow_up: null,
-          timestamp: {
+          created_at: {
             [Op.gte]: startTime,
             [Op.lte]: endTime,
           },

@@ -38,6 +38,7 @@ import { UserNeedHelp } from './user-need-help.model';
 import { ChatUserComplain } from './chat-user-complain.model';
 import { Cost } from './cost.model';
 import { Personalization } from './personalization.model';
+import { KtpVerification } from './ktp-verification.model';
 
 /**
  * ============================================================================
@@ -149,4 +150,10 @@ export class User extends Model {
    */
   @HasMany(() => Personalization, 'user_id')
   personalizations!: Personalization[];
+
+  /**
+   * One-to-Many relationship dengan KtpVerification
+   */
+  @HasMany(() => KtpVerification, 'user_id')
+  ktpVerifications!: KtpVerification[];
 }

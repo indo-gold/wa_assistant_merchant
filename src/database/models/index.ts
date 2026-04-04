@@ -25,7 +25,7 @@ export { OrderOtp, OtpPurpose, OtpStatus } from './order-otp.model';
 export { StudioAI, StudioStatus } from './studio-ai.model';
 export { AgentAI } from './agent-ai.model';
 export { ModelAI } from './model-ai.model';
-export { Cost } from './cost.model';
+export { Cost, CostOperationType } from './cost.model';
 
 // Cron/Reminder Models
 export { Survey, SurveyStatus } from './survey.model';
@@ -52,6 +52,9 @@ export { UserNeedHelp, HelpSessionStatus } from './user-need-help.model';
 export { ChatUserComplain, ComplainCategory } from './chat-user-complain.model';
 export { Personalization } from './personalization.model';
 export { ProductsHistory } from './products-history.model';
+
+// KTP Verification
+export { KtpVerification } from './ktp-verification.model';
 
 // Logging Models
 export { ErrorLog } from './error-log.model';

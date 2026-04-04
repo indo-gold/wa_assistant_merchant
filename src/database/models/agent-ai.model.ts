@@ -4,7 +4,7 @@
  * ============================================================================
  *
  * Model untuk konfigurasi AI Agent.
- * Menyimpan instruction, model, dan parameters untuk setiap agent.
+ * Menyimpan instruction, model reference, dan parameters untuk setiap agent.
  *
  * Contoh agent: 'AI Utama', 'Agent Response', 'Agent Cari Pengetahuan', dll
  *
@@ -12,20 +12,11 @@
  * @version 1.0.0
  * ============================================================================
  */
-import {
-  Table,
-  Column,
-  Model,
-  DataType,
-  PrimaryKey,
-  AutoIncrement,
-  AllowNull,
-  Default,
-  ForeignKey,
-  BelongsTo,
-} from 'sequelize-typescript';
+import { Table, Column, Model, DataType, PrimaryKey, AutoIncrement, AllowNull, Default, ForeignKey, BelongsTo, } from 'sequelize-typescript';
 
 import { StudioAI } from './studio-ai.model';
+import { ModelAI } from './model-ai.model';
+
 
 @Table({
   tableName: 'agent_ai',
@@ -47,9 +38,15 @@ export class AgentAI extends Model {
   @Column(DataType.TEXT)
   instruction!: string; // System prompt/instruction
 
+  @ForeignKey(() => ModelAI)
   @AllowNull(false)
-  @Column(DataType.STRING)
-  model!: string; // Model name: 'gpt-4', 'llama3-70b', dll
+  @Column(DataType.INTEGER)
+  model_id!: number; // Reference to model_ai.id (main model)
+
+  @ForeignKey(() => ModelAI)
+  @AllowNull(true)
+  @Column(DataType.INTEGER)
+  hybrid_model_id!: number | null; // Reference to model_ai.id (hybrid fallback)
 
   @Default('0')
   @AllowNull(false)
@@ -61,19 +58,10 @@ export class AgentAI extends Model {
   @Column(DataType.INTEGER)
   studio_id!: number;
 
-  @AllowNull(true)
-  @Column(DataType.INTEGER)
-  hybrid_studio_id!: number | null;
-
   @Default('')
   @AllowNull(false)
   @Column(DataType.TEXT)
   parameters!: string; // JSON string: { temperature: 0.7, max_tokens: 1000 }
-
-  @Default('')
-  @AllowNull(false)
-  @Column(DataType.TEXT)
-  first_chat!: string; // Pesan pertama untuk new user
 
   @Column(DataType.DATE)
   timestamp!: Date;
@@ -81,4 +69,10 @@ export class AgentAI extends Model {
   // Relationships
   @BelongsTo(() => StudioAI, 'studio_id')
   studio!: StudioAI;
+
+  @BelongsTo(() => ModelAI, 'model_id')
+  mainModel!: ModelAI;
+
+  @BelongsTo(() => ModelAI, 'hybrid_model_id')
+  hybridModel!: ModelAI | null;
 }

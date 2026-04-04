@@ -146,6 +146,14 @@ export class ChatHistory extends Model {
   status!: MessageStatus;
 
   /**
+   * Hasil processing AI (transkripsi audio, deskripsi gambar, OCR KTP, dll)
+   * Digunakan untuk LLM context, sedangkan `message` untuk tampilan UI.
+   */
+  @Default(null)
+  @Column(DataType.TEXT)
+  processed_content!: string | null;
+
+  /**
    * Data JSON tambahan (payload dari webhook)
    */
   @Default(null)
@@ -154,7 +162,7 @@ export class ChatHistory extends Model {
 
   /**
    * ID admin jika percakapan diambil alih admin
-   */
+   *
   @Default(null)
   @Column(DataType.INTEGER)
   admin_id!: number | null;

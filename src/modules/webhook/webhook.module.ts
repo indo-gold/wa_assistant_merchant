@@ -40,7 +40,7 @@ import { WebhookLoggingService } from './services/webhook-logging.service';
 import { XenditService } from '../order/services/xendit.service';
 import { OrderService } from '../order/services/order.service';
 import { MediaService } from '../media/services/media.service';
-import { UserService } from '../user/services/user.service';
+import { UserModule } from '../user/user.module';
 import { ChatService } from '../chat/services/chat.service';
 import { ProductModule } from '../product/product.module';
 import { OrderModule } from '../order/order.module';
@@ -53,6 +53,7 @@ import { AiModule } from '../ai/ai.module';
     ProductModule,
     OrderModule,
     AiModule,
+    UserModule,
     SequelizeModule.forFeature([
       User,
       ChatHistory,
@@ -76,7 +77,6 @@ import { AiModule } from '../ai/ai.module';
   providers: [
     MessageProcessorService,
     WebhookLoggingService,
-    UserService,
     ChatService,
     WhatsappApiService,
     MediaService,

@@ -4,7 +4,7 @@
  * ============================================================================
  *
  * Service utama untuk mengorkestrasi AI processing.
- * - Routing ke provider yang tepat
+ * - Routing ke provider yang tepat (hybrid model priority)
  * - Tool execution
  * - Cost tracking
  *
@@ -17,7 +17,7 @@ import { InjectModel } from '@nestjs/sequelize';
 
 import { CompletionRequest, ChatMessage } from '../providers/base.provider';
 import { CostTrackingService } from './cost-tracking.service';
-import { StudioAI, AgentAI } from '../../../database/models';
+import { StudioAI, AgentAI, ModelAI, CostOperationType } from '../../../database/models';
 import { AiProviderFactory } from './ai-provider.factory';
 import { AiProviderType } from './ai-provider.factory';
 
@@ -48,6 +48,14 @@ export interface ToolDefinition {
   };
 }
 
+interface ResolvedModelConfig {
+  modelName: string;
+  providerType: AiProviderType;
+  studioName: string;
+  modelId: number;
+  provider: ReturnType<AiProviderFactory['getProvider']>;
+}
+
 @Injectable()
 export class AiOrchestratorService {
   private readonly logger = new Logger(AiOrchestratorService.name);
@@ -57,8 +65,9 @@ export class AiOrchestratorService {
     private readonly studioModel: typeof StudioAI,
     @InjectModel(AgentAI)
     private readonly agentModel: typeof AgentAI,
+    @InjectModel(ModelAI)
+    private readonly modelAiModel: typeof ModelAI,
     private readonly providerFactory: AiProviderFactory,
-
     private readonly costTracking: CostTrackingService,
   ) {}
 
@@ -86,13 +95,12 @@ export class AiOrchestratorService {
       const studio = await this.getActiveStudio();
       if (!studio) throw new Error('No active studio');
 
-      // Get agent configuration
+      // Get agent configuration with ModelAI included
       const agent = await this.getAgent(agentName, studio.id);
       if (!agent) throw new Error(`Agent ${agentName} not found`);
 
-      // Get provider
-      const providerType = this.mapStudioToProvider(studio.studio);
-      const provider = this.providerFactory.getProvider(providerType);
+      // Resolve model config: hybrid first, fallback to main
+      const modelConfig = await this.resolveModelConfig(agent);
 
       // Parse parameters dari agent
       const parameters = this.parseAgentParameters(agent.parameters);
@@ -105,7 +113,7 @@ export class AiOrchestratorService {
 
       // Build request
       const request: CompletionRequest = {
-        model: agent.model,
+        model: modelConfig.modelName,
         messages: messagesWithInstruction,
         temperature: parameters.temperature ?? 0.7,
         max_tokens: parameters.max_tokens ?? 2000,
@@ -136,7 +144,7 @@ export class AiOrchestratorService {
       }
 
       // Call AI
-      const completion = await provider.createCompletion(request);
+      const completion = await modelConfig.provider.createCompletion(request);
 
       // Track cost
       await this.costTracking.trackCost(
@@ -146,6 +154,8 @@ export class AiOrchestratorService {
         context.waMessageId,
         messagesWithInstruction,
         Date.now() - startTime,
+        modelConfig.modelId,
+        CostOperationType.CHAT_COMPLETION,
       );
 
       // Check for tool calls
@@ -163,16 +173,16 @@ export class AiOrchestratorService {
             content: completion.choices[0]?.message?.content || null,
             tool_calls: toolCalls,
           },
-          model: agent.model,
-          provider: studio.studio,
+          model: modelConfig.modelName,
+          provider: modelConfig.studioName,
           executionTime: Date.now() - startTime,
         };
       }
 
       return {
         content: completion.choices[0]?.message?.content || '',
-        model: agent.model,
-        provider: studio.studio,
+        model: modelConfig.modelName,
+        provider: modelConfig.studioName,
         executionTime: Date.now() - startTime,
       };
     } catch (error) {
@@ -196,12 +206,15 @@ export class AiOrchestratorService {
     const startTime = Date.now();
 
     try {
-      // Get Agent Response configuration
+      // Get active studio
       const studio = await this.getActiveStudio();
       if (!studio) throw new Error('No active studio');
 
       const agent = await this.getAgent('Agent Response', studio.id);
       if (!agent) throw new Error('Agent Response not found');
+
+      // Resolve model config: hybrid first, fallback to main
+      const modelConfig = await this.resolveModelConfig(agent);
 
       // Parse parameters dari agent
       const parameters = this.parseAgentParameters(agent.parameters);
@@ -221,7 +234,6 @@ export class AiOrchestratorService {
         });
 
         // Add tool results after assistant message
-        // This is REQUIRED by OpenAI API - tool_calls must be followed by tool messages
         for (const result of toolResults) {
           if (result.tool_call_id) {
             conversationHistory.push({
@@ -233,18 +245,15 @@ export class AiOrchestratorService {
         }
       }
 
-      const providerType = this.mapStudioToProvider(studio.studio);
-      const provider = this.providerFactory.getProvider(providerType);
-
       const request: CompletionRequest = {
-        model: agent.model,
+        model: modelConfig.modelName,
         messages: conversationHistory,
         temperature: parameters.temperature ?? 0.7,
         max_tokens: parameters.max_tokens ?? 2000,
         store: false,
       };
 
-      const completion = await provider.createCompletion(request);
+      const completion = await modelConfig.provider.createCompletion(request);
 
       // Track cost
       await this.costTracking.trackCost(
@@ -254,12 +263,14 @@ export class AiOrchestratorService {
         context.waMessageId,
         conversationHistory,
         Date.now() - startTime,
+        modelConfig.modelId,
+        CostOperationType.CHAT_COMPLETION,
       );
 
       return {
         content: completion.choices[0]?.message?.content || '',
-        model: agent.model,
-        provider: studio.studio,
+        model: modelConfig.modelName,
+        provider: modelConfig.studioName,
         executionTime: Date.now() - startTime,
       };
     } catch (error) {
@@ -270,10 +281,76 @@ export class AiOrchestratorService {
 
   /**
    * ==========================================================================
+   * RESOLVE MODEL CONFIG
+   * ==========================================================================
+   * Resolve provider & model untuk agent.
+   * Priority: hybrid_model_id (dari studio hybrid aktif) → fallback model_id (dari studio utama is_used=1)
+   */
+  private async resolveModelConfig(agent: AgentAI): Promise<ResolvedModelConfig> {
+    // 1. Coba hybrid model dulu
+    if (agent.hybrid_model_id) {
+      const hybridModel = await this.modelAiModel.findOne({
+        where: { id: agent.hybrid_model_id },
+        include: [
+          {
+            model: StudioAI,
+            where: { is_active: 'active' },
+            required: true,
+          },
+        ],
+      });
+
+      if (hybridModel?.studio) {
+        const providerType = this.mapStudioToProvider(hybridModel.studio.studio);
+        this.logger.log(
+          `Using hybrid model: ${hybridModel.model} from ${hybridModel.studio.studio}`,
+        );
+        return {
+          modelName: hybridModel.model,
+          providerType,
+          studioName: hybridModel.studio.studio,
+          modelId: hybridModel.id,
+          provider: this.providerFactory.getProvider(providerType),
+        };
+      }
+    }
+
+    // 2. Fallback ke main model dengan studio utama (is_used='1')
+    const mainModel = await this.modelAiModel.findOne({
+      where: { id: agent.model_id },
+      include: [
+        {
+          model: StudioAI,
+          where: { is_used: '1' },
+          required: true,
+        },
+      ],
+    });
+
+    if (!mainModel || !mainModel.studio) {
+      throw new Error(
+        `No valid model configuration found for agent id=${agent.id}. Main model_id=${agent.model_id}`,
+      );
+    }
+
+    const providerType = this.mapStudioToProvider(mainModel.studio.studio);
+    this.logger.log(
+      `Using main model: ${mainModel.model} from ${mainModel.studio.studio}`,
+    );
+
+    return {
+      modelName: mainModel.model,
+      providerType,
+      studioName: mainModel.studio.studio,
+      modelId: mainModel.id,
+      provider: this.providerFactory.getProvider(providerType),
+    };
+  }
+
+  /**
+   * ==========================================================================
    * PARSE AGENT PARAMETERS
    * ==========================================================================
-   * Parse parameter JSON string dari AgentAI ke object.
-   * Handle null, empty string, atau JSON yang tidak valid.
    */
   private parseAgentParameters(parameters: string | null): AgentParameters {
     if (!parameters || parameters.trim() === '' || parameters === '{}') {
@@ -283,12 +360,10 @@ export class AiOrchestratorService {
     try {
       const parsed = JSON.parse(parameters) as AgentParameters;
 
-      // Validate temperature (harus antara 0 dan 2)
       if (parsed.temperature !== undefined) {
         parsed.temperature = Math.max(0, Math.min(2, parsed.temperature));
       }
 
-      // Validate max_tokens (harus positive integer)
       if (parsed.max_tokens !== undefined) {
         parsed.max_tokens = Math.max(1, Math.floor(parsed.max_tokens));
       }
@@ -315,10 +390,15 @@ export class AiOrchestratorService {
    * ==========================================================================
    * GET AGENT
    * ==========================================================================
+   * Get agent dengan join ModelAI.
    */
   private async getAgent(name: string, studioId: number): Promise<AgentAI | null> {
     return this.agentModel.findOne({
       where: { name, studio_id: studioId },
+      include: [
+        { model: ModelAI, as: 'mainModel' },
+        { model: ModelAI, as: 'hybridModel' },
+      ],
     });
   }
 
@@ -333,6 +413,7 @@ export class AiOrchestratorService {
       groq: 'groq',
       deepseek: 'deepseek',
       openrouter: 'openrouter',
+      xai: 'grok',
       grok: 'grok',
       cerebras: 'cerebras',
       bailian: 'bailian',
