@@ -16,12 +16,16 @@ import { Module } from '@nestjs/common';
 import { OrderService } from './services/order.service';
 import { CartService } from './services/cart.service';
 import { XenditService } from './services/xendit.service';
+import { PromoService } from './services/promo.service';
 import { FeeRuleController } from './controllers/fee-rule.controller';
 import {
   Cart,
   Order,
   OrderPayment,
   OrderOtp,
+  Promo,
+  PromoProduct,
+  PromoUsageLog,
 } from '../../database/models';
 
 @Module({
@@ -31,11 +35,14 @@ import {
       Order,
       OrderPayment,
       OrderOtp,
+      Promo,
+      PromoProduct,
+      PromoUsageLog,
     ]),
     HttpModule,
   ],
   controllers: [FeeRuleController],
-  providers: [CartService, OrderService, XenditService],
-  exports: [CartService, OrderService, XenditService],
+  providers: [CartService, OrderService, XenditService, PromoService],
+  exports: [CartService, OrderService, XenditService, PromoService],
 })
 export class OrderModule {}

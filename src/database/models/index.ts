@@ -17,6 +17,11 @@ export { Product } from './product.model';
 export { Cart, CartStatus, ProductOrder } from './cart.model';
 export { Order, OrderStatus, PickupStatus } from './order.model';
 
+// Promo Models
+export { Promo, DiscountType } from './promo.model';
+export { PromoProduct } from './promo-product.model';
+export { PromoUsageLog } from './promo-usage-log.model';
+
 // Payment Models (NEW)
 export { OrderPayment, PaymentStatus, FeeType } from './order-payment.model';
 export { OrderOtp, OtpPurpose, OtpStatus } from './order-otp.model';

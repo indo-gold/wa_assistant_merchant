@@ -136,22 +136,27 @@ export class ToolRegistryService implements OnModuleInit {
 
       get_promo: () => this.aiToolService.getPromo(),
 
-      get_buyback_information: (args) =>
-        this.aiToolService.getBuybackInformation(args.assistant_answer),
-
       get_user_need_help: (args, ctx) =>
         this.aiToolService.getUserNeedHelp(args.assistant_answer, args.topic, ctx),
 
       personalization: (args, ctx) =>
-        this.aiToolService.setPersonalization(args.personality, args.assistant_answer, ctx),
+        this.aiToolService.setPersonalization(
+          args.personality,
+          args.assistant_answer,
+          ctx,
+          args.nickname,
+          args.age,
+          args.occupation,
+          args.language_style,
+          args.interests,
+          args.notes,
+        ),
 
       set_product_reminder: (args, ctx) => this.aiToolService.setProductReminder(args.query, ctx),
 
       ignore_message: (args) => this.aiToolService.ignoreMessage(args.query),
 
       reply_immediately: (args) => this.aiToolService.replyImmediately(args.assistant_answer),
-
-      verify_otp: (args) => this.aiToolService.verifyOtp(args.order_id, args.otp_code),
     };
 
     return handlerMap[name] || null;

@@ -47,6 +47,9 @@ import {
   OrderPayment,
   OrderOtp,
   KtpVerification,
+  Promo,
+  PromoProduct,
+  PromoUsageLog,
 } from './database/models';
 import { TemplateMessageModule } from './modules/template-message/template-message.module';
 import { KnowledgeBaseModule } from './modules/knowledge-base/knowledge-base.module';
@@ -113,6 +116,9 @@ import { allConfigs } from './config/app.config';
       OrderPayment,
       OrderOtp,
       KtpVerification,
+      Promo,
+      PromoProduct,
+      PromoUsageLog,
     ]),
 
     // 3. Logger

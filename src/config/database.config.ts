@@ -73,7 +73,6 @@ export class DatabaseConfig implements SequelizeOptionsFactory {
       // utf8mb4 untuk support emoji dan karakter unicode lengkap
       dialectOptions: {
         charset: 'utf8mb4',
-        collate: 'utf8mb4_unicode_ci',
       },
 
       // ========================================================================

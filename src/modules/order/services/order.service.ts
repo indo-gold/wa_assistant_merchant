@@ -26,7 +26,6 @@ import {
   OtpPurpose,
 } from '../../../database/models';
 
-
 export interface OrderConfirmationResult {
   success: boolean;
   orderId?: number;
@@ -49,13 +48,13 @@ export interface CreateOrderWithPaymentLinkParams {
   invoiceUrl: string;
   expiryDate: Date;
   items: Array<{ name: string; quantity: number; price: number }>;
-  
+
   // Platform fee fields (NEW)
-  feeType: string;          // 'percent' | 'flat'
+  feeType: string; // 'percent' | 'flat'
   platformFeeAmount: number;
-  merchantAmount: number;   // Amount sebelum fee
-  feePercent?: number;      // Untuk history
-  feeFlat?: number;         // Untuk history
+  merchantAmount: number; // Amount sebelum fee
+  feePercent?: number; // Untuk history
+  feeFlat?: number; // Untuk history
 }
 
 export interface CreateOrderResult {
@@ -167,65 +166,6 @@ export class OrderService {
     const timestamp = Date.now().toString().slice(-3);
     const prefix = Math.floor(100 + Math.random() * 900).toString();
     return prefix + timestamp;
-  }
-
-  /**
-   * ==========================================================================
-   * VERIFY OTP
-   * ==========================================================================
-   * Verifikasi kode OTP saat pengambilan barang
-   */
-  async verifyOtp(orderId: number, otpCode: string): Promise<OtpVerificationResult> {
-    try {
-      const otp = await this.orderOtpModel.findOne({
-        where: {
-          order_id: orderId,
-          otp_code: otpCode,
-          status: OtpStatus.ACTIVE,
-        },
-      });
-
-      if (!otp) {
-        return {
-          success: false,
-          message: 'Kode OTP tidak valid atau sudah tidak aktif.',
-        };
-      }
-
-      if (!otp.isValid()) {
-        await otp.markAsExpired();
-        return {
-          success: false,
-          message: 'Kode OTP sudah expired. Silakan hubungi customer service.',
-        };
-      }
-
-      // Mark OTP as used
-      await otp.markAsUsed();
-
-      // Update order status
-      await this.orderModel.update(
-        {
-          otp_verified: true,
-          pickup_status: PickupStatus.PICKED_UP,
-          picked_up_at: new Date(),
-        },
-        { where: { id: orderId } },
-      );
-
-      this.logger.log(`OTP verified for order: ${orderId}`);
-
-      return {
-        success: true,
-        message: 'Verifikasi berhasil! Pesanan dapat diambil.',
-      };
-    } catch (error) {
-      this.logger.error(`OTP verification error: ${(error as Error).message}`);
-      return {
-        success: false,
-        message: 'Terjadi kesalahan saat verifikasi.',
-      };
-    }
   }
 
   /**

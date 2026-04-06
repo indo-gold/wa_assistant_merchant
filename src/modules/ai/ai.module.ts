@@ -27,6 +27,9 @@ import {
   ReminderProducts,
   OrderPayment,
   OrderOtp,
+  Promo,
+  PromoProduct,
+  PromoUsageLog,
 } from '../../database/models';
 import { KnowledgeBaseModule } from '../knowledge-base/knowledge-base.module';
 import { AiOrchestratorService } from './services/ai-orchestrator.service';
@@ -58,6 +61,9 @@ import { UserModule } from '../user/user.module';
       ReminderProducts,
       OrderPayment,
       OrderOtp,
+      Promo,
+      PromoProduct,
+      PromoUsageLog,
     ]),
     KnowledgeBaseModule,
     ProductModule,

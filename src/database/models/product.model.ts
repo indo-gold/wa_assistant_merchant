@@ -2,15 +2,14 @@
  * ============================================================================
  * PRODUCT MODEL
  * ============================================================================
- * 
+ *
  * Model Sequelize untuk tabel products.
  * Menyimpan informasi produk emas/perak.
- * 
+ *
  * @author IndoGold Team
  * @version 1.0.0
  * ============================================================================
  */
-
 import {
   Table,
   Column,
@@ -21,9 +20,13 @@ import {
   AllowNull,
   Default,
   HasMany,
+  BelongsToMany,
 } from 'sequelize-typescript';
+
 import { ReminderProducts } from './reminder-products.model';
 import { ProductsHistory } from './products-history.model';
+import { PromoProduct } from './promo-product.model';
+import { Promo } from './promo.model';
 
 @Table({
   tableName: 'products',
@@ -39,10 +42,6 @@ export class Product extends Model {
   @AllowNull(false)
   @Column(DataType.INTEGER)
   id!: number;
-
-  @AllowNull(false)
-  @Column(DataType.INTEGER)
-  product_id!: number;
 
   @AllowNull(false)
   @Column(DataType.STRING(50))
@@ -110,4 +109,7 @@ export class Product extends Model {
 
   @HasMany(() => ProductsHistory, 'product_id')
   productsHistory!: ProductsHistory[];
+
+  @BelongsToMany(() => Promo, () => PromoProduct)
+  promos!: Promo[];
 }

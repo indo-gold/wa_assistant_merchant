@@ -17,7 +17,7 @@ import { InjectModel } from '@nestjs/sequelize';
 
 import { CompletionRequest, ChatMessage } from '../providers/base.provider';
 import { CostTrackingService } from './cost-tracking.service';
-import { StudioAI, AgentAI, ModelAI, CostOperationType } from '../../../database/models';
+import { StudioAI, AgentAI, ModelAI, CostOperationType, Personalization } from '../../../database/models';
 import { AiProviderFactory } from './ai-provider.factory';
 import { AiProviderType } from './ai-provider.factory';
 
@@ -67,9 +67,36 @@ export class AiOrchestratorService {
     private readonly agentModel: typeof AgentAI,
     @InjectModel(ModelAI)
     private readonly modelAiModel: typeof ModelAI,
+    @InjectModel(Personalization)
+    private readonly personalizationModel: typeof Personalization,
     private readonly providerFactory: AiProviderFactory,
     private readonly costTracking: CostTrackingService,
   ) {}
+
+  /**
+   * ==========================================================================
+   * BUILD PERSONALIZATION CONTEXT
+   * ==========================================================================
+   */
+  private async buildPersonalizationContext(userId: number): Promise<string> {
+    const p = await this.personalizationModel.findOne({
+      where: { user_id: userId.toString() },
+    });
+
+    if (!p) return '';
+
+    const parts: string[] = [];
+    if (p.nickname) parts.push(`Panggil user dengan nama "${p.nickname}".`);
+    if (p.age) parts.push(`Usia user: ${p.age} tahun.`);
+    if (p.occupation) parts.push(`Pekerjaan user: ${p.occupation}.`);
+    if (p.language_style) parts.push(`Gaya bahasa yang diinginkan: ${p.language_style}.`);
+    if (p.interests) parts.push(`Minat/user suka: ${p.interests}.`);
+    if (p.personality) parts.push(`Catatan kepribadian: ${p.personality}.`);
+    if (p.notes) parts.push(`Catatan tambahan: ${p.notes}.`);
+
+    if (parts.length === 0) return '';
+    return '\n\n[PERSONALISASI USER]\n' + parts.join('\n');
+  }
 
   /**
    * ==========================================================================
@@ -105,9 +132,12 @@ export class AiOrchestratorService {
       // Parse parameters dari agent
       const parameters = this.parseAgentParameters(agent.parameters);
 
+      // Build personalization context
+      const personalizationContext = await this.buildPersonalizationContext(context.userId);
+
       // Build messages with agent instruction as system prompt
       const messagesWithInstruction: ChatMessage[] = [
-        { role: 'system', content: agent.instruction },
+        { role: 'system', content: agent.instruction + personalizationContext },
         ...messages.filter((m) => m.role !== 'system'),
       ];
 
@@ -219,9 +249,12 @@ export class AiOrchestratorService {
       // Parse parameters dari agent
       const parameters = this.parseAgentParameters(agent.parameters);
 
+      // Build personalization context
+      const personalizationContext = await this.buildPersonalizationContext(context.userId);
+
       // Build conversation with agent instruction and tool results
       const conversationHistory: ChatMessage[] = [
-        { role: 'system', content: agent.instruction },
+        { role: 'system', content: agent.instruction + personalizationContext },
         ...messages.filter((m) => m.role !== 'system'),
       ];
 

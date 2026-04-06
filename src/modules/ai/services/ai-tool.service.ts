@@ -36,17 +36,19 @@ import {
   MessageRole,
   MessageType,
   CostOperationType,
+  Promo,
 } from '../../../database/models';
 import { KnowledgeBaseService } from '../../knowledge-base/services/knowledge-base.service';
+import { KtpVerificationService } from '../../user/services/ktp-verification.service';
 import { WhatsappApiService } from '../../whatsapp/services/whatsapp-api.service';
 import { CompletionRequest, ChatMessage } from '../providers/base.provider';
+import { XenditService } from '../../order/services/xendit.service';
+import { PromoService } from '../../order/services/promo.service';
 import { OrderService } from '../../order/services/order.service';
 import { CartService } from '../../order/services/cart.service';
-import { XenditService } from '../../order/services/xendit.service';
 import { ChatService } from '../../chat/services/chat.service';
 import { CostTrackingService } from './cost-tracking.service';
 import { AiProviderFactory } from './ai-provider.factory';
-import { KtpVerificationService } from '../../user/services/ktp-verification.service';
 
 export interface ToolContext {
   userPhone: string;
@@ -87,12 +89,15 @@ export class AiToolService {
     private readonly studioModel: typeof StudioAI,
     @InjectModel(ModelAI)
     private readonly modelAiModel: typeof ModelAI,
+    @InjectModel(Promo)
+    private readonly promoModel: typeof Promo,
     @InjectConnection()
     private readonly sequelize: Sequelize,
     private readonly knowledgeBaseService: KnowledgeBaseService,
     private readonly cartService: CartService,
     private readonly orderService: OrderService,
     private readonly xenditService: XenditService,
+    private readonly promoService: PromoService,
     private readonly whatsappApi: WhatsappApiService,
     private readonly chatService: ChatService,
     private readonly providerFactory: AiProviderFactory,
@@ -190,7 +195,10 @@ export class AiToolService {
    * Resolve model name, model id, dan provider dari agent.
    * Priority: hybrid_model_id -> model_id.
    */
-  private async resolveModelConfig(agent: AgentAI | null): Promise<{
+  private async resolveModelConfig(
+    agent: AgentAI | null,
+    preferMainModel: boolean = false,
+  ): Promise<{
     modelName: string;
     modelId: number;
     providerType: import('./ai-provider.factory').AiProviderType;
@@ -199,8 +207,8 @@ export class AiToolService {
       return { modelName: 'gpt-4o-mini', modelId: 0, providerType: 'openai' };
     }
 
-    // 1. Coba hybrid model dulu
-    if (agent.hybrid_model_id) {
+    // 1. Coba hybrid model dulu (kecuali kalau preferMainModel = true)
+    if (!preferMainModel && agent.hybrid_model_id) {
       const hybridModel = await this.modelAiModel.findOne({
         where: { id: agent.hybrid_model_id },
         include: [
@@ -269,11 +277,38 @@ export class AiToolService {
     waMessageId: string,
     toolSuffix: string = '',
   ): Promise<any> {
-    const modelConfig = await this.resolveModelConfig(agent);
+    let modelConfig = await this.resolveModelConfig(agent);
     const provider = this.providerFactory.getProvider(modelConfig.providerType);
 
     const startTime = Date.now();
-    const completion = await provider.createCompletion(request);
+    let completion;
+
+    try {
+      completion = await provider.createCompletion(request);
+    } catch (error) {
+      const errMsg = (error as Error).message || '';
+      const isFallbackable =
+        errMsg.includes('429') ||
+        errMsg.includes('Rate limit') ||
+        errMsg.includes('rate limit') ||
+        errMsg.includes('capacity') ||
+        errMsg.includes('overloaded') ||
+        errMsg.includes('temporarily unavailable');
+
+      if (isFallbackable && agent?.model_id && agent.model_id !== agent.hybrid_model_id) {
+        this.logger.warn(
+          `Hybrid model failed for agent ${agent.name}: ${errMsg}. Falling back to main model.`,
+        );
+        modelConfig = await this.resolveModelConfig(agent, true);
+        const fallbackProvider = this.providerFactory.getProvider(modelConfig.providerType);
+        completion = await fallbackProvider.createCompletion({
+          ...request,
+          model: modelConfig.modelName,
+        });
+      } else {
+        throw error;
+      }
+    }
 
     const costTrackingMessageId = toolSuffix ? `${waMessageId}_${toolSuffix}` : waMessageId;
 
@@ -519,7 +554,9 @@ ${agent?.instruction || ''}`,
           throw new Error('Not a valid SQL query');
         }
       } catch (error) {
-        this.logger.warn(`Gold price query failed: ${(error as Error).message}. Falling back to default search.`);
+        this.logger.warn(
+          `Gold price query failed: ${(error as Error).message}. Falling back to default search.`,
+        );
       }
 
       // Fallback 1: default search with user request
@@ -553,7 +590,9 @@ ${agent?.instruction || ''}`,
             },
             limit: 20,
           });
-          this.logger.log(`Fallback 2 (keyword search: ${keywords.join(', ')}) returned ${results.length} rows`);
+          this.logger.log(
+            `Fallback 2 (keyword search: ${keywords.join(', ')}) returned ${results.length} rows`,
+          );
         }
       }
 
@@ -774,7 +813,7 @@ Data Produk:\n${JSON.stringify(products, null, 2)}`,
         };
       }
 
-      const agent = await this.getAgent('Agent Budget');
+      const agent = await this.getAgent('Agent Product Sesuai Budget');
       const combinations = this.calculateBudgetCombinations(products, nominalBudget);
 
       if (agent) {
@@ -867,7 +906,8 @@ Available Products: ${JSON.stringify(products.map((p) => ({ name: `${p.product_n
       const parameters = agent?.parameters ? JSON.parse(agent.parameters) : {};
 
       // Identifikasi pesan terakhir
-      const lastUserMessage = [...chatHistory].reverse().find((h) => h.role === 'user')?.content || '';
+      const lastUserMessage =
+        [...chatHistory].reverse().find((h) => h.role === 'user')?.content || '';
 
       let extractedProducts: Array<{
         product_name: string;
@@ -889,7 +929,9 @@ Available Products: ${JSON.stringify(products.map((p) => ({ name: `${p.product_n
         // ==========================================================
         this.logger.log('Manual extraction failed, falling back to AI extraction');
 
-        const isChangeRequest = /\b(ganti|ubah|gantiin|ganti jadi|ubah jadi|jadi)\b/i.test(lastUserMessage);
+        const isChangeRequest = /\b(ganti|ubah|gantiin|ganti jadi|ubah jadi|jadi)\b/i.test(
+          lastUserMessage,
+        );
         const normalizedLastMessage = lastUserMessage
           .toLowerCase()
           .replace(/(\d)([a-zA-Z])/g, '$1 $2')
@@ -1069,30 +1111,74 @@ ${JSON.stringify(
         new Date().getTime() - new Date(recentPendingCart.timestamp).getTime() < TEN_MINUTES;
 
       // 2. Jika ada valid products, create cart dan kirim WA langsung
+      // Apply promo ke validated products
+      if (validatedProducts.length > 0) {
+        const usedSinglePromoIds = new Set<number>();
+
+        for (const item of validatedProducts) {
+          const originalPrice = item.price!;
+          const promoResult = await this.promoService.findBestPromoForProduct(
+            {
+              product_id: item.product_id!,
+              product_name: item.actual_product_name!,
+              variant_name: item.actual_variant_name,
+              quantity: item.quantity,
+              price: originalPrice,
+            },
+            context.userId,
+          );
+
+          if (promoResult && promoResult.discountAmount > 0) {
+            // Kalau promo single product dan sudah dipakai untuk produk lain, skip
+            if (promoResult.isSingleProduct && usedSinglePromoIds.has(promoResult.promoId)) {
+              this.logger.log(
+                `Skipping single product promo ${promoResult.promoName} for product ${item.product_id} (already used)`,
+              );
+              continue;
+            }
+
+            (item as any).original_price = originalPrice;
+            item.price = promoResult.finalAmount / item.quantity; // Harga setelah promo per unit
+            (item as any).promo_info = {
+              promoName: promoResult.promoName,
+              discountAmount: promoResult.discountAmount,
+            };
+
+            if (promoResult.isSingleProduct) {
+              usedSinglePromoIds.add(promoResult.promoId);
+            }
+
+            this.logger.log(
+              `Promo applied for user ${context.userId} product ${item.product_id}: ${promoResult.promoName}, discount=${promoResult.discountAmount}`,
+            );
+          }
+        }
+      }
+
       if (validatedProducts.length > 0) {
         let cart;
         if (isRecentCart) {
-          this.logger.log(`Reusing recent pending cart ${recentPendingCart.id} instead of creating new cart`);
+          this.logger.log(
+            `Reusing recent pending cart ${recentPendingCart.id} instead of creating new cart`,
+          );
           // Update cart yang sudah ada dengan produk baru
           await this.cartModel.update(
             {
-              products: JSON.stringify(
-                validatedProducts.map((p) => ({
-                  product_id: p.product_id!,
-                  product_name: p.actual_product_name!,
-                  variant_id: 0,
-                  variant_name: p.actual_variant_name || '',
-                  quantity: p.quantity,
-                  denomination: p.denomination,
-                  max_quantity: 100,
-                  price: p.price!,
-                  discount_price: 0,
-                  is_po: 0,
-                  automatic_po: 0,
-                  est_date_po: 0,
-                  stock_po: 0,
-                })),
-              ),
+              json_order: validatedProducts.map((p: any) => ({
+                product_id: p.product_id!,
+                product_name: p.actual_product_name!,
+                variant_id: 0,
+                variant_name: p.actual_variant_name || '',
+                quantity: p.quantity,
+                denomination: p.denomination,
+                max_quantity: 100,
+                price: p.original_price || p.price!,
+                discount_price: p.original_price ? p.price! : 0,
+                is_po: 0,
+                automatic_po: 0,
+                est_date_po: 0,
+                stock_po: 0,
+              })),
               wa_message_id: context.messageId,
             },
             { where: { id: recentPendingCart.id } },
@@ -1101,7 +1187,7 @@ ${JSON.stringify(
         } else {
           cart = await this.cartService.createCart({
             user_id: context.userId,
-            products: validatedProducts.map((p) => ({
+            products: validatedProducts.map((p: any) => ({
               product_id: p.product_id!,
               product_name: p.actual_product_name!,
               variant_id: 0,
@@ -1109,8 +1195,8 @@ ${JSON.stringify(
               quantity: p.quantity,
               denomination: p.denomination,
               max_quantity: 100,
-              price: p.price!,
-              discount_price: 0,
+              price: p.original_price || p.price!,
+              discount_price: p.original_price ? p.price! : 0,
               is_po: 0,
               automatic_po: 0,
               est_date_po: 0,
@@ -1203,24 +1289,38 @@ ${JSON.stringify(
       denomination: number;
       quantity: number;
       price?: number;
+      original_price?: number;
+      promo_info?: { promoName: string; discountAmount: number } | null;
     }>,
   ): string {
     let message = '*Rincian Pesanan Anda:*\n\n';
     let totalPrice = 0;
+    let totalDiscount = 0;
 
     products.forEach((p, index) => {
+      const originalSubtotal = (p.original_price || p.price || 0) * p.quantity;
       const subtotal = (p.price || 0) * p.quantity;
       totalPrice += subtotal;
+      if (p.promo_info) totalDiscount += p.promo_info.discountAmount;
 
       message += `*#${index + 1}*\n`;
       message += `Produk: ${p.actual_product_name}\n`;
       message += `Variant: ${p.actual_variant_name || '-'}\n`;
       message += `Berat: ${p.denomination} gram\n`;
       message += `Jumlah: ${p.quantity} keping\n`;
-      message += `Harga per unit: Rp ${(p.price || 0).toLocaleString('id-ID')}\n`;
-      message += `Subtotal: Rp ${subtotal.toLocaleString('id-ID')}\n\n`;
+      if (p.promo_info) {
+        message += `~Harga asli: Rp ${originalSubtotal.toLocaleString('id-ID')}~\n`;
+        message += `*Harga promo (${p.promo_info.promoName}): Rp ${subtotal.toLocaleString('id-ID')}*\n`;
+      } else {
+        message += `Harga per unit: Rp ${(p.price || 0).toLocaleString('id-ID')}\n`;
+        message += `Subtotal: Rp ${subtotal.toLocaleString('id-ID')}\n`;
+      }
+      message += `\n`;
     });
 
+    if (totalDiscount > 0) {
+      message += `Total Hemat: Rp ${totalDiscount.toLocaleString('id-ID')}\n`;
+    }
     message += `*Total Harga: Rp ${totalPrice.toLocaleString('id-ID')}*\n\n`;
     message += `Apakah Anda ingin melanjutkan pesanan ini?\n`;
     message += `Balas dengan *Lanjut* untuk konfirmasi atau *Tidak* untuk membatalkan.`;
@@ -1385,17 +1485,31 @@ ${JSON.stringify(
         }
 
         if (!cart) {
+          const noCartMessage = 'Tidak ada keranjang aktif. Silakan buat pesanan baru.';
+          const response = await this.whatsappApi.sendMessage({
+            type: 'text',
+            to: context.userPhone,
+            data: { text: noCartMessage },
+          });
+          await this.chatService.saveMessage({
+            user_id: context.userId,
+            wa_message_id: response.messages[0]?.id,
+            message: noCartMessage,
+            role: MessageRole.ASSISTANT,
+            type: MessageType.TEXT,
+          });
           return {
             success: false,
             data: null,
-            message: 'Tidak ada keranjang aktif. Silakan buat pesanan baru.',
+            message: noCartMessage,
+            skipLLM: true,
           };
         }
 
         // HARD GATE: Cek KTP verifikasi sebelum lanjut ke pembayaran
         const ktpVerification = await this.ktpVerificationService.findByUser(context.userId);
         this.logger.log(
-          `KTP check for user ${context.userId}: ${ktpVerification ? 'found (id=' + ktpVerification.id + ')' : 'NOT FOUND'}`
+          `KTP check for user ${context.userId}: ${ktpVerification ? 'found (id=' + ktpVerification.id + ')' : 'NOT FOUND'}`,
         );
         if (!ktpVerification) {
           const ktpMessage =
@@ -1434,21 +1548,35 @@ ${JSON.stringify(
         // 3. Hitung total amount dari cart
         const merchantAmount = this.calculateCartTotal(cart);
         if (merchantAmount <= 0) {
+          const invalidCartMessage = 'Keranjang kosong atau total tidak valid.';
+          const response = await this.whatsappApi.sendMessage({
+            type: 'text',
+            to: context.userPhone,
+            data: { text: invalidCartMessage },
+          });
+          await this.chatService.saveMessage({
+            user_id: context.userId,
+            wa_message_id: response.messages[0]?.id,
+            message: invalidCartMessage,
+            role: MessageRole.ASSISTANT,
+            type: MessageType.TEXT,
+          });
           return {
             success: false,
             data: null,
-            message: 'Keranjang kosong atau total tidak valid.',
+            message: invalidCartMessage,
+            skipLLM: true,
           };
         }
 
         // 4. Hitung platform fee
         const feeCalculation = this.calculatePlatformFee(merchantAmount);
         const totalAmount = feeCalculation.totalWithFee;
-        
+
         this.logger.log(
           `Platform fee calculation: type=${feeCalculation.feeType}, ` +
-          `merchantAmount=${merchantAmount}, fee=${feeCalculation.platformFee}, ` +
-          `total=${totalAmount}`
+            `merchantAmount=${merchantAmount}, fee=${feeCalculation.platformFee}, ` +
+            `total=${totalAmount}`,
         );
 
         // 5. Generate external ID unik
@@ -1456,38 +1584,42 @@ ${JSON.stringify(
 
         // 6. Cek apakah ada Xendit Fee Rule ID
         const feeRuleId = process.env.XENDIT_FEE_RULE_ID;
-        
+
         // 7. Buat Payment Link di Xendit
         let invoice;
         const invoiceItems = this.buildInvoiceItems(cart);
-        
+
         if (feeRuleId) {
           // Gunakan Xendit Fee Rule (otomatis split ke Master Account)
-          // Tidak perlu tambah line item fee, Xendit yang handle
+          // Amount dikirim totalAmount (sudah include fee) supaya WA dan payment link konsisten
           this.logger.log(`Using Xendit Fee Rule: ${feeRuleId}`);
-          
-          invoice = await this.xenditService.createInvoiceWithFeeRule({
-            externalId,
-            amount: merchantAmount, // Amount asli tanpa fee (Xendit akan tambah fee)
-            description: `Pembelian Emas - Order #${cart.id}`,
-            payerEmail: 'customer@indogold.id',
-            invoiceDuration: 86400,
-            items: invoiceItems,
-          }, feeRuleId);
+
+          invoice = await this.xenditService.createInvoiceWithFeeRule(
+            {
+              externalId,
+              amount: totalAmount, // Total amount sudah include fee, Xendit akan split fee otomatis
+              description: `Pembelian Emas - Order #${cart.id}`,
+              payerEmail: 'customer@indogold.id',
+              invoiceDuration: 86400,
+              items: invoiceItems,
+            },
+            feeRuleId,
+          );
         } else {
           // Fallback: Buat invoice manual dengan line item fee
           if (feeCalculation.platformFee > 0) {
-            const feeItemName = feeCalculation.feeType === 'flat' 
-              ? 'Biaya Layanan' 
-              : `Biaya Layanan (${feeCalculation.feePercent}%)`;
-            
+            const feeItemName =
+              feeCalculation.feeType === 'flat'
+                ? 'Biaya Layanan'
+                : `Biaya Layanan (${feeCalculation.feePercent}%)`;
+
             invoiceItems.push({
               name: feeItemName,
               quantity: 1,
               price: feeCalculation.platformFee,
             });
           }
-          
+
           invoice = await this.xenditService.createInvoice({
             externalId,
             amount: totalAmount,
@@ -1518,11 +1650,53 @@ ${JSON.stringify(
         });
 
         if (!orderResult.success) {
+          const orderFailMessage = orderResult.message || 'Gagal membuat order.';
+          const response = await this.whatsappApi.sendMessage({
+            type: 'text',
+            to: context.userPhone,
+            data: { text: orderFailMessage },
+          });
+          await this.chatService.saveMessage({
+            user_id: context.userId,
+            wa_message_id: response.messages[0]?.id,
+            message: orderFailMessage,
+            role: MessageRole.ASSISTANT,
+            type: MessageType.TEXT,
+          });
           return {
             success: false,
             data: null,
-            message: orderResult.message || 'Gagal membuat order.',
+            message: orderFailMessage,
+            skipLLM: true,
           };
+        }
+
+        // Log promo usage jika ada promo yang di-apply
+        try {
+          const cartItems = this.parseCartItems(cart);
+          const itemsWithDiscount = cartItems.filter((item) => item.discount_price > 0);
+          if (itemsWithDiscount.length > 0) {
+            const promoResult = await this.promoService.findBestPromoForCart(
+              cartItems.map((item) => ({
+                product_id: item.product_id,
+                product_name: item.product_name,
+                variant_name: item.variant_name || '',
+                quantity: item.quantity,
+                price: item.price,
+              })),
+              context.userId,
+            );
+            if (promoResult && promoResult.discountAmount > 0) {
+              await this.promoService.logPromoUsage(
+                promoResult.promoId,
+                context.userId,
+                orderResult.orderId!,
+                promoResult.discountAmount,
+              );
+            }
+          }
+        } catch (promoLogError) {
+          this.logger.warn(`Failed to log promo usage: ${(promoLogError as Error).message}`);
         }
 
         // 9. Kirim link pembayaran ke user
@@ -1535,6 +1709,7 @@ ${JSON.stringify(
           platformFee: feeCalculation.platformFee,
           feeType: feeCalculation.feeType,
           feePercent: feeCalculation.feePercent,
+          hasFeeRule: !!feeRuleId,
         });
 
         // Kirim WhatsApp message
@@ -1555,28 +1730,60 @@ ${JSON.stringify(
 
         return {
           success: true,
-          data: { 
+          data: {
             order_id: orderResult.orderId,
             payment_link: invoice.invoice_url,
-            action: 'payment_link_created' 
+            action: 'payment_link_created',
           },
           message: paymentMessage,
           skipLLM: true, // Skip LLM, langsung kirim WA
         };
       } else {
+        const cancelMessage =
+          'Pesanan dibatalkan. Jika ingin memesan lagi, silakan informasikan produk yang diinginkan.';
+        const response = await this.whatsappApi.sendMessage({
+          type: 'text',
+          to: context.userPhone,
+          data: { text: cancelMessage },
+        });
+        await this.chatService.saveMessage({
+          user_id: context.userId,
+          wa_message_id: response.messages[0]?.id,
+          message: cancelMessage,
+          role: MessageRole.ASSISTANT,
+          type: MessageType.TEXT,
+        });
         return {
           success: true,
           data: { action: 'cancel' },
-          message:
-            'Pesanan dibatalkan. Jika ingin memesan lagi, silakan informasikan produk yang diinginkan.',
+          message: cancelMessage,
+          skipLLM: true,
         };
       }
     } catch (error) {
       this.logger.error(`User confirm buy error: ${(error as Error).message}`);
+      const errorMessage = `Maaf, terjadi kesalahan saat memproses konfirmasi Anda. Silakan coba lagi nanti.`;
+      try {
+        const response = await this.whatsappApi.sendMessage({
+          type: 'text',
+          to: context.userPhone,
+          data: { text: errorMessage },
+        });
+        await this.chatService.saveMessage({
+          user_id: context.userId,
+          wa_message_id: response.messages[0]?.id,
+          message: errorMessage,
+          role: MessageRole.ASSISTANT,
+          type: MessageType.TEXT,
+        });
+      } catch (sendErr) {
+        this.logger.error(`Failed to send error message: ${(sendErr as Error).message}`);
+      }
       return {
         success: false,
         data: null,
-        message: `Error: ${(error as Error).message}`,
+        message: errorMessage,
+        skipLLM: true,
       };
     }
   }
@@ -1586,23 +1793,21 @@ ${JSON.stringify(
    * CALCULATE CART TOTAL
    * ==========================================================================
    */
-  private calculateCartTotal(cart: Cart): number {
-    // Parse json_order jika masih berupa string
+  private parseCartItems(cart: Cart): any[] {
     let orderItems: any[] = cart.json_order as any;
-    
     if (typeof cart.json_order === 'string') {
       try {
         orderItems = JSON.parse(cart.json_order);
       } catch (e) {
         this.logger.error('Failed to parse json_order:', cart.json_order);
-        return 0;
+        return [];
       }
     }
-    
-    if (!Array.isArray(orderItems)) {
-      return 0;
-    }
+    return Array.isArray(orderItems) ? orderItems : [];
+  }
 
+  private calculateCartTotal(cart: Cart): number {
+    const orderItems = this.parseCartItems(cart);
     return orderItems.reduce((total: number, item: any) => {
       const price = item.discount_price > 0 ? item.discount_price : item.price;
       return total + price * item.quantity;
@@ -1615,22 +1820,7 @@ ${JSON.stringify(
    * ==========================================================================
    */
   private buildInvoiceItems(cart: Cart): Array<{ name: string; quantity: number; price: number }> {
-    // Parse json_order jika masih berupa string
-    let orderItems: any[] = cart.json_order as any;
-    
-    if (typeof cart.json_order === 'string') {
-      try {
-        orderItems = JSON.parse(cart.json_order);
-      } catch (e) {
-        this.logger.error('Failed to parse json_order:', cart.json_order);
-        return [];
-      }
-    }
-    
-    if (!Array.isArray(orderItems)) {
-      return [];
-    }
-
+    const orderItems = this.parseCartItems(cart);
     return orderItems.map((item: any) => ({
       name: `${item.product_name} ${item.variant_name} ${item.denomination}g`,
       quantity: item.quantity,
@@ -1652,7 +1842,7 @@ ${JSON.stringify(
     return {
       type: process.env.PLATFORM_FEE_TYPE || 'percent',
       percent: parseFloat(process.env.PLATFORM_FEE_PERCENT || '1.15'),
-      flat: parseInt(process.env.PLATFORM_FEE_FLAT || '10000', 10)
+      flat: parseInt(process.env.PLATFORM_FEE_FLAT || '10000', 10),
     };
   }
 
@@ -1686,7 +1876,7 @@ ${JSON.stringify(
       totalWithFee: totalAmount + platformFee,
       feeType: config.type,
       feePercent: config.percent,
-      feeFlat: config.flat
+      feeFlat: config.flat,
     };
   }
 
@@ -1704,8 +1894,8 @@ ${JSON.stringify(
     platformFee?: number;
     feeType?: string;
     feePercent?: number;
+    hasFeeRule?: boolean;
   }): string {
-    const formattedAmount = params.amount.toLocaleString('id-ID');
     const formattedExpiry = params.expiryDate.toLocaleString('id-ID', {
       weekday: 'long',
       year: 'numeric',
@@ -1715,18 +1905,28 @@ ${JSON.stringify(
       minute: '2-digit',
     });
 
-    // Build breakdown biaya jika ada platform fee
     let breakdownText = '';
-    if (params.merchantAmount && params.platformFee && params.platformFee > 0) {
-      const formattedMerchantAmount = params.merchantAmount.toLocaleString('id-ID');
-      const formattedPlatformFee = params.platformFee.toLocaleString('id-ID');
-      
-      if (params.feeType === 'flat') {
-        breakdownText = `Subtotal Produk: Rp ${formattedMerchantAmount}\nBiaya Layanan: Rp ${formattedPlatformFee}\n`;
-      } else {
-        breakdownText = `Subtotal Produk: Rp ${formattedMerchantAmount}\nBiaya Layanan (${params.feePercent}%): Rp ${formattedPlatformFee}\n`;
+    let displayAmount: number;
+
+    if (params.hasFeeRule) {
+      // Xendit Fee Rule: customer hanya lihat subtotal produk, fee diserap merchant
+      displayAmount = params.merchantAmount || params.amount;
+    } else {
+      // Manual fee: tampilkan breakdown biaya
+      displayAmount = params.amount;
+      if (params.merchantAmount && params.platformFee && params.platformFee > 0) {
+        const formattedMerchantAmount = params.merchantAmount.toLocaleString('id-ID');
+        const formattedPlatformFee = params.platformFee.toLocaleString('id-ID');
+
+        if (params.feeType === 'flat') {
+          breakdownText = `Subtotal Produk: Rp ${formattedMerchantAmount}\nBiaya Layanan: Rp ${formattedPlatformFee}\n`;
+        } else {
+          breakdownText = `Subtotal Produk: Rp ${formattedMerchantAmount}\nBiaya Layanan (${params.feePercent}%): Rp ${formattedPlatformFee}\n`;
+        }
       }
     }
+
+    const formattedAmount = displayAmount.toLocaleString('id-ID');
 
     return (
       `🛒 *Pesanan Berhasil Dibuat!*\n\n` +
@@ -1785,56 +1985,113 @@ ${JSON.stringify(
    */
   async getPromo(): Promise<ToolResult> {
     try {
-      this.logger.log('Getting promo information');
+      this.logger.log('Getting active promos from database');
 
-      const promos = [
-        {
-          name: 'Cashback 2%',
-          description: 'Cashback 2% untuk pembelian emas minimal 10 gram',
-          code: 'CASHBACK2',
+      const now = new Date();
+
+      const promos = await this.promoModel.findAll({
+        where: {
+          is_active: true,
+          start_date: { [Op.lte]: now },
+          end_date: { [Op.gte]: now },
         },
-        {
-          name: 'Gratis Ongkir',
-          description: 'Gratis ongkir untuk pengiriman ke seluruh Indonesia',
-          code: 'FREEONGKIR',
-        },
+        include: [
+          {
+            model: Product,
+            attributes: ['id', 'product_name', 'variant_name', 'denomination'],
+            through: { attributes: [] },
+          },
+        ],
+        order: [['end_date', 'ASC']],
+      });
+
+      if (promos.length === 0) {
+        return {
+          success: true,
+          data: [],
+          message: 'Saat ini belum ada promo yang aktif. Silakan cek kembali nanti ya!',
+        };
+      }
+
+      const formattedPromos = promos.map((p: any) => {
+        const discountText =
+          p.discount_type === 'percentage'
+            ? `${p.discount_value}%`
+            : p.discount_type === 'fixed_amount'
+              ? `Rp ${Number(p.discount_value).toLocaleString('id-ID')}`
+              : 'Gratis Ongkir';
+
+        const linkedProducts = p.products || p.Products || [];
+        let applicableProducts = 'Berlaku untuk semua produk';
+
+        if (!p.applies_to_all_products) {
+          if (linkedProducts.length === 0) {
+            applicableProducts = 'Berlaku untuk produk tertentu (hubungi CS untuk detail)';
+          } else {
+            // Kelompokkan by product_name, kumpulkan denomination unik
+            const grouped = new Map<string, number[]>();
+            linkedProducts.forEach((prod: any) => {
+              const name = prod.product_name?.trim() || 'Produk';
+              const denom = Number(prod.denomination) || 0;
+              if (!grouped.has(name)) grouped.set(name, []);
+              if (denom > 0 && !grouped.get(name)!.includes(denom)) {
+                grouped.get(name)!.push(denom);
+              }
+            });
+
+            const maxGroups = 3;
+            const entries = Array.from(grouped.entries());
+            const shown = entries.slice(0, maxGroups).map(([name, denoms]) => {
+              const sortedDenoms = denoms
+                .sort((a, b) => a - b)
+                .map((d) => `${d}gr`)
+                .join(', ');
+              return denoms.length > 0 ? `${name} (${sortedDenoms})` : name;
+            });
+            const remaining = entries.length - maxGroups;
+
+            applicableProducts =
+              `Berlaku untuk: ${shown.join(', ')}` +
+              (remaining > 0 ? `, dan ${remaining} produk lainnya` : '');
+          }
+        }
+
+        return {
+          name: p.name,
+          description: p.description,
+          discount: discountText,
+          minPurchase:
+            p.min_purchase_amount > 0
+              ? `Rp ${Number(p.min_purchase_amount).toLocaleString('id-ID')}`
+              : 'Tanpa minimal pembelian',
+          validUntil: p.end_date,
+          applicableProducts,
+        };
+      });
+
+      const messageLines = [
+        `🎉 *${promos.length} Promo Aktif Hari Ini* 🎉`,
+        '',
+        ...formattedPromos.map(
+          (p, i) =>
+            `*${i + 1}. ${p.name}*\n` +
+            `${p.description}\n` +
+            `Diskon: ${p.discount}\n` +
+            `Minimal belanja: ${p.minPurchase}\n` +
+            `${p.applicableProducts}\n` +
+            `Berlaku s/d: ${new Date(p.validUntil).toLocaleDateString('id-ID')}`,
+        ),
+        '',
+        'Promo akan langsung dipotong otomatis saat checkout ya! 🛒',
       ];
 
       return {
         success: true,
-        data: promos,
-        message: `Tersedia ${promos.length} promo aktif`,
+        data: formattedPromos,
+        message: messageLines.join('\n'),
       };
     } catch (error) {
       this.logger.error(`Get promo error: ${(error as Error).message}`);
-      return {
-        success: false,
-        data: null,
-        message: `Error: ${(error as Error).message}`,
-      };
-    }
-  }
-
-  /**
-   * ==========================================================================
-   * GET BUYBACK INFORMATION
-   * ==========================================================================
-   */
-  async getBuybackInformation(assistantAnswer: string): Promise<ToolResult> {
-    try {
-      this.logger.log('Getting buyback information');
-
-      return {
-        success: true,
-        data: {
-          info: 'Buyback hanya tersedia di Toko Langsung',
-          contact: '+628118257699',
-          link: 'https://indogold.id/buyback',
-        },
-        message: assistantAnswer,
-      };
-    } catch (error) {
-      this.logger.error(`Get buyback info error: ${(error as Error).message}`);
       return {
         success: false,
         data: null,
@@ -1887,19 +2144,42 @@ ${JSON.stringify(
     personality: string,
     assistantAnswer: string,
     context: ToolContext,
+    nickname?: string,
+    age?: number,
+    occupation?: string,
+    languageStyle?: string,
+    interests?: string,
+    notes?: string,
   ): Promise<ToolResult> {
     try {
-      this.logger.log(`Setting personalization: ${personality}`);
+      this.logger.log(`Setting personalization for user ${context.userId}`);
 
-      await this.personalizationModel.upsert({
-        user_id: context.userId,
-        personality,
-        updated_at: new Date(),
+      const existing = await this.personalizationModel.findOne({
+        where: { user_id: context.userId },
       });
+
+      const payload: any = {
+        user_id: context.userId,
+        updated_at: new Date(),
+      };
+
+      if (personality !== undefined) payload.personality = personality;
+      if (nickname !== undefined) payload.nickname = nickname;
+      if (age !== undefined) payload.age = age;
+      if (occupation !== undefined) payload.occupation = occupation;
+      if (languageStyle !== undefined) payload.language_style = languageStyle;
+      if (interests !== undefined) payload.interests = interests;
+      if (notes !== undefined) payload.notes = notes;
+
+      if (existing) {
+        await existing.update(payload);
+      } else {
+        await this.personalizationModel.create(payload);
+      }
 
       return {
         success: true,
-        data: { personality },
+        data: payload,
         message: assistantAnswer,
       };
     } catch (error) {
@@ -2011,32 +2291,5 @@ ${JSON.stringify(
     }
 
     return combinations;
-  }
-
-  /**
-   * ==========================================================================
-   * VERIFY OTP
-   * ==========================================================================
-   * Verifikasi kode OTP pengambilan barang
-   */
-  async verifyOtp(orderId: number, otpCode: string): Promise<ToolResult> {
-    try {
-      this.logger.log(`Verifying OTP for order: ${orderId}`);
-
-      const result = await this.orderService.verifyOtp(orderId, otpCode);
-
-      return {
-        success: result.success,
-        data: null,
-        message: result.message,
-      };
-    } catch (error) {
-      this.logger.error(`Verify OTP error: ${(error as Error).message}`);
-      return {
-        success: false,
-        data: null,
-        message: 'Terjadi kesalahan saat verifikasi OTP.',
-      };
-    }
   }
 }
