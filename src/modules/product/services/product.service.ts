@@ -1,27 +1,27 @@
+import { InjectModel } from '@nestjs/sequelize';
 /**
  * ============================================================================
  * PRODUCT SERVICE
  * ============================================================================
- * 
+ *
  * Service untuk product catalog management.
- * 
+ *
  * Fitur:
  * - Get products with filters
  * - Search products
  * - Get product variants
  * - Get price list
  * - Check stock availability
- * 
+ *
  * @author IndoGold Team
  * @version 1.0.0
  * ============================================================================
  */
-
 import { Injectable } from '@nestjs/common';
-import { InjectModel } from '@nestjs/sequelize';
 import { Op, Sequelize } from 'sequelize';
-import { Product } from '../../../database/models';
+
 import { ProductFilterDto } from '../dto/product-filter.dto';
+import { Product } from '../../../database/models';
 
 /**
  * Product dengan stok info
@@ -97,7 +97,10 @@ export class ProductService {
 
     return this.productModel.findAll({
       where,
-      order: [['product_name', 'ASC'], ['denomination', 'ASC']],
+      order: [
+        ['product_name', 'ASC'],
+        ['denomination', 'ASC'],
+      ],
     });
   }
 
@@ -193,14 +196,12 @@ export class ProductService {
    */
   async checkStock(
     productId: number,
-    variantId: number,
     denomination: number,
     quantity: number,
   ): Promise<{ available: boolean; stock: number; isPreOrder: boolean }> {
     const product = await this.productModel.findOne({
       where: {
         product_id: productId,
-        variant_id: variantId,
         denomination,
       },
     });
@@ -215,10 +216,7 @@ export class ProductService {
     }
 
     // Check pre-order stock
-    if (
-      (product.is_po || product.automatic_po) &&
-      product.stock_po >= quantity
-    ) {
+    if ((product.is_po || product.automatic_po) && product.stock_po >= quantity) {
       return { available: true, stock: product.stock_po, isPreOrder: true };
     }
 
@@ -289,12 +287,15 @@ export class ProductService {
     }
 
     // Group by product name
-    const grouped = products.reduce((acc, p) => {
-      const key = `${p.product_name} ${p.variant_name || ''}`.trim();
-      if (!acc[key]) acc[key] = [];
-      acc[key].push(p);
-      return acc;
-    }, {} as Record<string, Product[]>);
+    const grouped = products.reduce(
+      (acc, p) => {
+        const key = `${p.product_name} ${p.variant_name || ''}`.trim();
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(p);
+        return acc;
+      },
+      {} as Record<string, Product[]>,
+    );
 
     const formatRupiah = (num: number) =>
       'Rp ' + num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');

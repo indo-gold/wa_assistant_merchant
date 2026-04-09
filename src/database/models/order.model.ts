@@ -112,10 +112,14 @@ export class Order extends Model {
 
   /**
    * Status pembayaran
+   * - pending: Menunggu pembayaran
+   * - paid: Sudah dibayar
+   * - failed: Gagal/expired
+   * - cancelled: Dibatalkan
    */
   @Default('pending')
-  @Column(DataType.ENUM('pending', 'paid', 'failed'))
-  payment_status!: 'pending' | 'paid' | 'failed';
+  @Column(DataType.ENUM('pending', 'paid', 'failed', 'cancelled'))
+  payment_status!: 'pending' | 'paid' | 'failed' | 'cancelled';
 
   /**
    * Status apakah OTP sudah diverifikasi
@@ -136,6 +140,20 @@ export class Order extends Model {
    */
   @Column(DataType.DATE)
   picked_up_at!: Date | null;
+
+  /**
+   * Waktu order dibatalkan (jika status failed/cancelled)
+   */
+  @Default(null)
+  @Column(DataType.DATE)
+  cancelled_at!: Date | null;
+
+  /**
+   * Alasan pembatalan
+   */
+  @Default(null)
+  @Column(DataType.STRING)
+  cancellation_reason!: string | null;
 
   @CreatedAt
   @Column(DataType.DATE)

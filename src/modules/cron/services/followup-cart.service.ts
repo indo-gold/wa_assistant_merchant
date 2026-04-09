@@ -44,18 +44,89 @@ export class FollowupCartService {
   @Cron(CronExpression.EVERY_HOUR)
   async handleCron(): Promise<void> {
     this.logger.log('🔄 Running follow-up cart cron job...');
+    
+    // 1. Auto-expire carts yang sudah lewat batas waktu
+    await this.autoExpireCarts();
+    
+    // 2. Kirim follow-up untuk carts yang pending
     await this.processFollowupCarts();
+  }
+
+  /**
+   * ==========================================================================
+   * AUTO EXPIRE CARTS
+   * ==========================================================================
+   * Tandai cart yang sudah expired (melebihi 5 menit) sebagai expired.
+   */
+  private async autoExpireCarts(): Promise<void> {
+    try {
+      const expiredCarts = await this.cartModel.findAll({
+        where: {
+          status_order: CartStatus.PENDING,
+          expires_at: {
+            [Op.lt]: new Date(),
+          },
+        },
+        include: [
+          {
+            model: User,
+            attributes: ['id', 'name', 'phone_number'],
+            required: true,
+          },
+        ],
+      });
+
+      if (expiredCarts.length === 0) {
+        return;
+      }
+
+      this.logger.log(`Found ${expiredCarts.length} expired carts to process`);
+
+      for (const cart of expiredCarts) {
+        try {
+          // Update status ke EXPIRED
+          await cart.update({ status_order: CartStatus.EXPIRED });
+
+          // Kirim notifikasi ke user
+          const expireMessage = 
+            `⏰ *Keranjang Expired*\n\n` +
+            `Keranjang pesanan Anda telah expired karena melebihi batas waktu 5 menit.\n\n` +
+            `Silakan buat pesanan baru jika masih ingin membeli. Harga yang berlaku adalah harga terkini.`;
+
+          await this.whatsappApi.sendMessage({
+            type: 'text',
+            to: cart.user.phone_number,
+            data: { text: expireMessage },
+          });
+
+          // Simpan ke chat history
+          await this.chatService.saveMessage({
+            user_id: cart.user.id,
+            message: expireMessage,
+            role: MessageRole.ASSISTANT,
+            type: MessageType.TEXT,
+          });
+
+          this.logger.log(`Cart ${cart.id} marked as expired and user notified`);
+        } catch (error) {
+          this.logger.error(`Failed to process expired cart ${cart.id}: ${(error as Error).message}`);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Auto expire carts error: ${(error as Error).message}`);
+    }
   }
 
   /**
    * ==========================================================================
    * PROCESS FOLLOW-UP CARTS
    * ==========================================================================
+   * Follow up carts yang sudah 2 menit tapi belum checkout.
    */
   async processFollowupCarts(): Promise<void> {
     try {
-      const startTime = new Date(Date.now() - 4.5 * 60 * 60 * 1000); // 4.5 jam lalu
-      const endTime = new Date(Date.now() - 4 * 60 * 60 * 1000);     // 4 jam lalu
+      const startTime = new Date(Date.now() - 3 * 60 * 1000); // 3 menit lalu
+      const endTime = new Date(Date.now() - 2 * 60 * 1000);   // 2 menit lalu
 
       const carts = await this.cartModel.findAll({
         where: {
@@ -104,7 +175,7 @@ export class FollowupCartService {
    */
   private async sendFollowupMessage(cart: Cart & { User?: User }): Promise<void> {
     try {
-      const text = `Halo Kak 👋, jika ingin menindaklanjuti pesanan sebelumnya, mohon konfirmasi kembali rincian pesanannya agar bisa segera kami proses, ya.`;
+      const text = `⏰ *Segera Checkout*\n\nHalo Kak 👋, pesanan Anda masih menunggu. Keranjang akan expired dalam 3 menit.\n\nSilakan konfirmasi *Lanjut* untuk mengamankan harga, ya.`;
 
       const response = await this.whatsappApi.sendMessage({
         type: 'reply_context',

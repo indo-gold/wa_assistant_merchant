@@ -498,7 +498,7 @@ export class OrderService {
         await order.update(
           {
             payment_status: 'paid',
-            pickup_status: PickupStatus.READY,
+            pickup_status: PickupStatus.PENDING,
           },
           { transaction },
         );
@@ -582,6 +582,114 @@ export class OrderService {
     } catch (error) {
       this.logger.error(`Failed to cancel order: ${(error as Error).message}`);
       return false;
+    }
+  }
+
+  /**
+   * ==========================================================================
+   * PROCESS PAYMENT EXPIRED
+   * ==========================================================================
+   * Handler untuk webhook Xendit saat pembayaran expired.
+   * - Update payment status ke EXPIRED
+   * - Update order status ke FAILED
+   * - Update cart status ke CANCELLED
+   * - Release stok (jika ada)
+   */
+  async processPaymentExpired(
+    xenditInvoiceId: string,
+    payload: Record<string, unknown>,
+  ): Promise<{ success: boolean; orderId?: number; cartId?: number; message?: string }> {
+    const transaction = await this.sequelize.transaction();
+
+    try {
+      // 1. Cari payment record
+      const payment = await this.orderPaymentModel.findOne({
+        where: { xendit_invoice_id: xenditInvoiceId },
+        transaction,
+      });
+
+      if (!payment) {
+        await transaction.rollback();
+        this.logger.warn(`Payment not found for expired invoice: ${xenditInvoiceId}`);
+        return { success: false, message: 'Payment record not found.' };
+      }
+
+      // 2. Cek jika sudah diproses sebelumnya
+      if (payment.status === PaymentStatus.EXPIRED || payment.status === PaymentStatus.FAILED) {
+        await transaction.rollback();
+        this.logger.log(`Payment ${payment.id} already marked as expired/failed`);
+
+        // Ambil order info untuk return
+        const order = await this.orderModel.findOne({
+          where: { payment_id: payment.id },
+        });
+
+        return {
+          success: true,
+          orderId: order?.id,
+          cartId: order?.cart_id,
+          message: 'Payment already processed as expired.',
+        };
+      }
+
+      // 3. Update payment status ke EXPIRED
+      await payment.update(
+        {
+          status: PaymentStatus.EXPIRED,
+          xendit_callback_payload: payload,
+        },
+        { transaction },
+      );
+
+      // 4. Update order status ke FAILED
+      const order = await this.orderModel.findOne({
+        where: { payment_id: payment.id },
+        transaction,
+      });
+
+      if (order) {
+        await order.update(
+          {
+            payment_status: 'failed',
+            cancelled_at: new Date(),
+            cancellation_reason: 'Payment link expired',
+          },
+          { transaction },
+        );
+        this.logger.log(`Order ${order.id} marked as FAILED due to payment expiry`);
+
+        // 5. Update cart status ke CANCELLED
+        await this.cartModel.update(
+          {
+            status_order: CartStatus.CANCELLED,
+          },
+          {
+            where: { id: order.cart_id },
+            transaction,
+          },
+        );
+        this.logger.log(`Cart ${order.cart_id} marked as CANCELLED`);
+
+        // 6. TODO: Release stok jika ada sistem stok management
+        // await this.releaseStock(order.cart_id);
+      }
+
+      await transaction.commit();
+
+      this.logger.log(`Payment ${xenditInvoiceId} processed as expired`);
+      return {
+        success: true,
+        orderId: order?.id,
+        cartId: order?.cart_id,
+        message: 'Payment expired processed. Order marked as FAILED, Cart marked as CANCELLED.',
+      };
+    } catch (error) {
+      await transaction.rollback();
+      this.logger.error(`Failed to process payment expiry: ${(error as Error).message}`);
+      return {
+        success: false,
+        message: `Failed to process payment expiry: ${(error as Error).message}`,
+      };
     }
   }
 

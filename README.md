@@ -383,3 +383,12 @@ Untuk bantuan lebih lanjut, hubungi:
 ---
 
 <p align="center">Made with ❤️ by IndoGold Team</p>
+
+━━━━━━━━━━━━━━━━━━━━━
+⚠️ KETENTUAN PENTING:
+• ⏰ Harga di atas berlaku selama 5 menit
+• 🛒 Cart akan otomatis expired dalam 5 menit
+• 💳 Setelah checkout, Anda harus bayar dalam 3 jam
+• 📈 Setelah 5 menit, harga dapat berubah mengikuti pasar
+• ⚡ Stok terbatas, segera checkout untuk mengamankan harga
+━━━━━━━━━━━━━━━━━━━━━

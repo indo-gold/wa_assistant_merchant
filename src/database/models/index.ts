@@ -14,7 +14,7 @@
 export { User, UserStatus } from './user.model';
 export { ChatHistory, MessageType, MessageRole, MessageStatus } from './chat-history.model';
 export { Product } from './product.model';
-export { Cart, CartStatus, ProductOrder } from './cart.model';
+export { Cart, CartStatus, ProductOrder, PriceSnapshot } from './cart.model';
 export { Order, OrderStatus, PickupStatus } from './order.model';
 
 // Promo Models

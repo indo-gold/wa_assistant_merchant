@@ -2,14 +2,13 @@
  * ============================================================================
  * PRODUCTS HISTORY MODEL
  * ============================================================================
- * 
+ *
  * Model untuk menyimpan histori harga produk.
- * 
+ *
  * @author IndoGold Team
  * @version 1.0.0
  * ============================================================================
  */
-
 import {
   Table,
   Column,
@@ -39,10 +38,6 @@ export class ProductsHistory extends Model {
   @AllowNull(false)
   @Column(DataType.STRING(50))
   product_name!: string;
-
-  @AllowNull(false)
-  @Column(DataType.INTEGER)
-  variant_id!: number;
 
   @AllowNull(false)
   @Column(DataType.STRING(50))

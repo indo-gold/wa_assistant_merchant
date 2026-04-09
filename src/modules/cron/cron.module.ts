@@ -31,6 +31,7 @@ import { ReminderProductService } from './services/reminder-product.service';
 import { FollowupOrderService } from './services/followup-order.service';
 import { FollowupCartService } from './services/followup-cart.service';
 import { PaymentCronService } from './services/payment-cron.service';
+import { PaymentExpiredCronService } from './services/payment-expired-cron.service';
 import { ChatService } from '../chat/services/chat.service';
 import { OrderService } from '../order/services/order.service';
 import { XenditService } from '../order/services/xendit.service';
@@ -58,6 +59,7 @@ import { XenditService } from '../order/services/xendit.service';
     FollowupOrderService,
     ReminderProductService,
     PaymentCronService,
+    PaymentExpiredCronService,
     WhatsappApiService,
     ChatService,
     OrderService,

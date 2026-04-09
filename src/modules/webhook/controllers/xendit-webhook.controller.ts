@@ -24,6 +24,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { Public } from '../../../common/decorators/public.decorator';
+import { SkipThrottle } from '../../../common/decorators/skip-throttle.decorator';
 import { OrderService } from '../../order/services/order.service';
 import { XenditService } from '../../order/services/xendit.service';
 import { WhatsappApiService } from '../../whatsapp/services/whatsapp-api.service';
@@ -67,6 +68,7 @@ interface XenditWebhookPayload {
 
 @ApiTags('Webhook')
 @Controller('webhook/xendit')
+@SkipThrottle()
 export class XenditWebhookController {
   private readonly logger = new Logger(XenditWebhookController.name);
 
@@ -164,6 +166,11 @@ export class XenditWebhookController {
    * ==========================================================================
    * HANDLE PAYMENT EXPIRED
    * ==========================================================================
+   * Handle saat payment link expired dari Xendit.
+   * - Update payment status ke EXPIRED
+   * - Update order status ke FAILED
+   * - Update cart status ke CANCELLED
+   * - Notifikasi user
    */
   private async handlePaymentExpired(
     payload: XenditWebhookPayload,
@@ -171,32 +178,24 @@ export class XenditWebhookController {
     try {
       this.logger.log(`Processing expired payment: ${payload.id}`);
 
-      // Get payment record
-      const payment = await this.orderService['orderPaymentModel'].findOne({
-        where: { xendit_invoice_id: payload.id },
-        include: ['user'],
-      });
+      // Gunakan OrderService untuk process payment expired
+      const result = await this.orderService.processPaymentExpired(
+        payload.id,
+        payload as Record<string, unknown>,
+      );
 
-      if (!payment) {
-        this.logger.warn(`Payment not found for expired invoice: ${payload.id}`);
-        return { status: 'ok', message: 'Payment not found' };
+      if (!result.success) {
+        this.logger.error(`Failed to process expired payment: ${result.message}`);
+        return { status: 'error', message: result.message || 'Processing failed' };
       }
-
-      if (payment.status === 'expired') {
-        return { status: 'ok', message: 'Already marked as expired' };
-      }
-
-      // Update payment status
-      await payment.update({
-        status: 'expired',
-        xendit_callback_payload: payload,
-      });
 
       // Send notification to user
-      await this.sendExpiryNotification(payment);
+      if (result.orderId) {
+        await this.sendExpiryNotification(result.orderId, result.cartId);
+      }
 
-      this.logger.log(`Payment expired processed: ${payload.id}`);
-      return { status: 'ok', message: 'Payment expired processed' };
+      this.logger.log(`Payment expired processed: ${payload.id}, Order: ${result.orderId}, Cart: ${result.cartId}`);
+      return { status: 'ok', message: 'Payment expired processed. Order marked as FAILED, Cart CANCELLED.' };
     } catch (error) {
       this.logger.error(`Payment expired handler error: ${(error as Error).message}`);
       return { status: 'error', message: 'Failed to process payment expiry' };
@@ -250,27 +249,49 @@ export class XenditWebhookController {
    * ==========================================================================
    * SEND EXPIRY NOTIFICATION
    * ==========================================================================
+   * Kirim notifikasi ke user saat payment expired.
    */
-  private async sendExpiryNotification(payment: any): Promise<void> {
+  private async sendExpiryNotification(orderId?: number, _cartId?: number): Promise<void> {
     try {
-      if (!payment.user) {
-        this.logger.warn('User not found for expiry notification');
+      if (!orderId) {
+        this.logger.warn('Order ID not provided for expiry notification');
+        return;
+      }
+
+      // Get order dengan user info
+      const order = await this.orderService.getOrderById(orderId);
+      
+      if (!order || !order.user) {
+        this.logger.warn(`Order or user not found for expiry notification: ${orderId}`);
         return;
       }
 
       const message =
-        `*Pembayaran Expired*\n\n` +
-        `Invoice pembayaran Anda telah expired.\n\n` +
-        `Jika Anda masih ingin melanjutkan pemesanan, silakan buat pesanan baru.`;
+        `⏰ *Pembayaran Expired*\n\n` +
+        `Order ID: #${orderId}\n\n` +
+        `Link pembayaran Anda telah expired karena melebihi batas waktu 3 jam.\n\n` +
+        `Status:\n` +
+        `• Order: ❌ FAILED\n` +
+        `• Cart: ❌ CANCELLED\n\n` +
+        `Jika Anda masih ingin memesan, silakan buat pesanan baru dengan harga terkini.`;
 
       // Send WhatsApp message
-      await this.whatsappApi.sendMessage({
+      const response = await this.whatsappApi.sendMessage({
         type: 'text',
-        to: payment.user.phone_number,
+        to: order.user.phone_number,
         data: { text: message },
       });
 
-      this.logger.log(`Expiry notification sent to user: ${payment.user.phone_number}`);
+      // Save to chat history
+      await this.chatService.saveMessage({
+        user_id: order.user_id,
+        wa_message_id: response.messages[0]?.id,
+        message: message,
+        role: MessageRole.ASSISTANT,
+        type: MessageType.TEXT,
+      });
+
+      this.logger.log(`Expiry notification sent to user: ${order.user.phone_number}`);
     } catch (error) {
       this.logger.error(`Failed to send expiry notification: ${(error as Error).message}`);
     }

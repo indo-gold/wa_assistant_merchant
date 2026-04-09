@@ -48,10 +48,6 @@ export class Product extends Model {
   product_name!: string;
 
   @AllowNull(false)
-  @Column(DataType.INTEGER)
-  variant_id!: number;
-
-  @AllowNull(false)
   @Column(DataType.STRING(50))
   variant_name!: string;
 

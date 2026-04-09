@@ -26,6 +26,7 @@ import {
   Product,
   Cart,
   CartStatus,
+  PriceSnapshot,
   ChatUserComplain,
   UserNeedHelp,
   Personalization,
@@ -1167,7 +1168,6 @@ ${JSON.stringify(
               json_order: validatedProducts.map((p: any) => ({
                 product_id: p.product_id!,
                 product_name: p.actual_product_name!,
-                variant_id: 0,
                 variant_name: p.actual_variant_name || '',
                 quantity: p.quantity,
                 denomination: p.denomination,
@@ -1190,7 +1190,6 @@ ${JSON.stringify(
             products: validatedProducts.map((p: any) => ({
               product_id: p.product_id!,
               product_name: p.actual_product_name!,
-              variant_id: 0,
               variant_name: p.actual_variant_name || '',
               quantity: p.quantity,
               denomination: p.denomination,
@@ -1206,8 +1205,15 @@ ${JSON.stringify(
           });
         }
 
-        // Format dan kirim pesan rincian ke WhatsApp
-        const message = this.formatOrderDetailMessage(validatedProducts);
+        // Lock harga cart dan update price_locked_at
+        await this.cartService.lockCartPrices(cart.id);
+
+        // Format dan kirim pesan rincian ke WhatsApp (dengan disclaimer)
+        const message = this.formatOrderDetailMessage(validatedProducts, {
+          lockMinutes: 5,
+          showDisclaimer: true,
+          expiryHours: 0, // Tidak digunakan lagi, cart expired dalam 5 menit
+        });
 
         // Kirim dengan tombol interactive
         const response = await this.whatsappApi.sendMessage({
@@ -1281,6 +1287,7 @@ ${JSON.stringify(
    * ==========================================================================
    * FORMAT ORDER DETAIL MESSAGE
    * ==========================================================================
+   * Format pesan rincian pesanan dengan disclaimer harga.
    */
   private formatOrderDetailMessage(
     products: Array<{
@@ -1292,7 +1299,14 @@ ${JSON.stringify(
       original_price?: number;
       promo_info?: { promoName: string; discountAmount: number } | null;
     }>,
+    options?: {
+      lockMinutes?: number;
+      showDisclaimer?: boolean;
+      expiryHours?: number;
+    },
   ): string {
+    const { showDisclaimer = true } = options || {};
+
     let message = '*Rincian Pesanan Anda:*\n\n';
     let totalPrice = 0;
     let totalDiscount = 0;
@@ -1322,6 +1336,19 @@ ${JSON.stringify(
       message += `Total Hemat: Rp ${totalDiscount.toLocaleString('id-ID')}\n`;
     }
     message += `*Total Harga: Rp ${totalPrice.toLocaleString('id-ID')}*\n\n`;
+
+    // DISCLAIMER HARGA
+    if (showDisclaimer) {
+      message += `━━━━━━━━━━━━━━━━━━━━━\n`;
+      message += `⚠️ *KETENTUAN PENTING:*\n`;
+      message += `• ⏰ Harga di atas berlaku selama *5 menit*\n`;
+      message += `• 🛒 Cart akan otomatis *expired dalam 5 menit*\n`;
+      message += `• 💳 Setelah checkout, Anda harus bayar dalam *3 jam*\n`;
+      message += `• 📈 Setelah 5 menit, harga dapat berubah mengikuti pasar\n`;
+      message += `• ⚡ Stok terbatas, segera checkout untuk mengamankan harga\n`;
+      message += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+    }
+
     message += `Apakah Anda ingin melanjutkan pesanan ini?\n`;
     message += `Balas dengan *Lanjut* untuk konfirmasi atau *Tidak* untuk membatalkan.`;
 
@@ -1506,6 +1533,122 @@ ${JSON.stringify(
           };
         }
 
+        // ==========================================================================
+        // VALIDASI 1: Cek Cart Expiry
+        // ==========================================================================
+        const expiryValidation = await this.cartService.validateCartExpiry(cart.id);
+        if (!expiryValidation.valid) {
+          const expiredMessage = expiryValidation.message || 'Keranjang tidak valid.';
+          const response = await this.whatsappApi.sendMessage({
+            type: 'text',
+            to: context.userPhone,
+            data: { text: expiredMessage },
+          });
+          await this.chatService.saveMessage({
+            user_id: context.userId,
+            wa_message_id: response.messages[0]?.id,
+            message: expiredMessage,
+            role: MessageRole.ASSISTANT,
+            type: MessageType.TEXT,
+          });
+          return {
+            success: false,
+            data: null,
+            message: expiredMessage,
+            skipLLM: true,
+          };
+        }
+
+        // ==========================================================================
+        // VALIDASI 2: Cek Price Lock (jika ada)
+        // ==========================================================================
+        if (cart.price_locked_at && !cart.isPriceLockValid()) {
+          this.logger.log(`Cart ${cart.id} price lock expired, re-validating prices`);
+
+          // Validasi ulang harga
+          const priceValidation = await this.validateCartPrices(cart);
+
+          if (!priceValidation.valid || priceValidation.hasPriceChanges) {
+            // Refresh harga cart dengan harga terkini
+            await this.refreshCartPrices(cart);
+            await this.updateCartPriceSnapshot(cart);
+
+            // Re-lock harga untuk 5 menit lagi
+            await this.cartService.lockCartPrices(cart.id);
+
+            // Format pesan perubahan harga
+            const priceChangeMessage = this.formatPriceChangesMessage(priceValidation);
+
+            // Kirim pesan dengan tombol konfirmasi ulang
+            const response = await this.whatsappApi.sendMessage({
+              type: 'interactive',
+              to: context.userPhone,
+              data: {
+                text: priceChangeMessage + '\n\nApakah Anda ingin melanjutkan dengan harga baru?',
+                interactive: {
+                  model: 'reply buttons',
+                  buttons: [
+                    { type: 'reply', reply: { id: `confirm_${cart.id}_refresh`, title: 'Lanjut' } },
+                    { type: 'reply', reply: { id: `cancel_${cart.id}_refresh`, title: 'Tidak' } },
+                  ],
+                },
+              },
+            });
+
+            await this.chatService.saveMessage({
+              user_id: context.userId,
+              wa_message_id: response.messages[0]?.id,
+              message: priceChangeMessage,
+              role: MessageRole.ASSISTANT,
+              type: MessageType.INTERACTIVE,
+            });
+
+            return {
+              success: false,
+              data: { priceChanged: true },
+              message: priceChangeMessage,
+              skipLLM: true,
+            };
+          }
+
+          // Jika harga tidak berubah, re-lock saja
+          await this.cartService.lockCartPrices(cart.id);
+        }
+
+        // ==========================================================================
+        // VALIDASI 3: Final Price Validation (Real-time)
+        // ==========================================================================
+        const finalValidation = await this.validateCartPrices(cart);
+
+        if (finalValidation.stockIssues.length > 0) {
+          // Ada masalah stok
+          const stockMessage = this.formatPriceChangesMessage(finalValidation);
+          const response = await this.whatsappApi.sendMessage({
+            type: 'text',
+            to: context.userPhone,
+            data: {
+              text: stockMessage + '\n\nSilakan buat pesanan baru dengan jumlah yang tersedia.',
+            },
+          });
+          await this.chatService.saveMessage({
+            user_id: context.userId,
+            wa_message_id: response.messages[0]?.id,
+            message: stockMessage,
+            role: MessageRole.ASSISTANT,
+            type: MessageType.TEXT,
+          });
+
+          // Cancel cart karena stok tidak mencukupi
+          await this.cartService.cancelCart(cart.id);
+
+          return {
+            success: false,
+            data: { stockIssue: true },
+            message: stockMessage,
+            skipLLM: true,
+          };
+        }
+
         // HARD GATE: Cek KTP verifikasi sebelum lanjut ke pembayaran
         const ktpVerification = await this.ktpVerificationService.findByUser(context.userId);
         this.logger.log(
@@ -1600,7 +1743,7 @@ ${JSON.stringify(
               amount: totalAmount, // Total amount sudah include fee, Xendit akan split fee otomatis
               description: `Pembelian Emas - Order #${cart.id}`,
               payerEmail: 'customer@indogold.id',
-              invoiceDuration: 86400,
+              invoiceDuration: 10800, // 3 jam = 10800 detik
               items: invoiceItems,
             },
             feeRuleId,
@@ -1625,7 +1768,7 @@ ${JSON.stringify(
             amount: totalAmount,
             description: `Pembelian Emas - Order #${cart.id}`,
             payerEmail: 'customer@indogold.id',
-            invoiceDuration: 86400,
+            invoiceDuration: 10800, // 3 jam = 10800 detik
             items: invoiceItems,
           });
         }
@@ -1933,11 +2076,12 @@ ${JSON.stringify(
       `Order ID: #${params.orderId}\n` +
       breakdownText +
       `*Total Bayar: Rp ${formattedAmount}*\n` +
-      `Berlaku sampai: *${formattedExpiry}*\n\n` +
+      `⏰ Bayar sebelum: *${formattedExpiry}* (3 jam)\n\n` +
       `*Link Pembayaran:*\n` +
       `${params.paymentLink}\n\n` +
       `Silakan klik link di atas untuk melanjutkan pembayaran.\n` +
       `Anda dapat membayar menggunakan Virtual Account, QRIS, atau E-Wallet.\n\n` +
+      `⚠️ *Penting:* Link pembayaran berlaku 3 jam. Setelah lewat waktu, pesanan akan dibatalkan otomatis.\n\n` +
       `_Setelah pembayaran berhasil, Anda akan menerima kode OTP untuk pengambilan barang._`
     );
   }
@@ -2291,5 +2435,228 @@ ${JSON.stringify(
     }
 
     return combinations;
+  }
+
+  /**
+   * ==========================================================================
+   * VALIDATE CART PRICES
+   * ==========================================================================
+   * Validasi harga cart saat ini dengan harga terbaru di database.
+   * Returns: hasil validasi dan perubahan harga jika ada.
+   */
+  private async validateCartPrices(cart: Cart): Promise<{
+    valid: boolean;
+    hasPriceChanges: boolean;
+    priceChanges: Array<{
+      product_id: number;
+      product_name: string;
+      oldPrice: number;
+      newPrice: number;
+      difference: number;
+    }>;
+    currentTotal: number;
+    newTotal: number;
+    totalDifference: number;
+    stockIssues: Array<{
+      product_id: number;
+      product_name: string;
+      requested: number;
+      available: number;
+    }>;
+  }> {
+    const orderItems = this.parseCartItems(cart);
+    const priceChanges: any[] = [];
+    const stockIssues: any[] = [];
+    let currentTotal = 0;
+    let newTotal = 0;
+
+    for (const item of orderItems) {
+      const currentPrice = item.discount_price > 0 ? item.discount_price : item.price;
+      currentTotal += currentPrice * item.quantity;
+
+      // Ambil harga terkini dari database
+      const currentProduct = await this.productModel.findByPk(item.product_id);
+
+      if (!currentProduct) {
+        // Produk tidak ditemukan (mungkin dihapus)
+        priceChanges.push({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          oldPrice: currentPrice,
+          newPrice: 0,
+          difference: -currentPrice,
+        });
+        continue;
+      }
+
+      // Cek stok
+      if (currentProduct.max_quantity < item.quantity) {
+        stockIssues.push({
+          product_id: item.product_id,
+          product_name: currentProduct.product_name,
+          requested: item.quantity,
+          available: currentProduct.max_quantity,
+        });
+      }
+
+      // Cek perubahan harga (tolerance 1% untuk floating point)
+      const newPrice = currentProduct.price;
+      const priceDiff = Math.abs(newPrice - currentPrice);
+      const priceDiffPercent = currentPrice > 0 ? (priceDiff / currentPrice) * 100 : 0;
+
+      if (priceDiffPercent > 1) {
+        priceChanges.push({
+          product_id: item.product_id,
+          product_name: currentProduct.product_name,
+          oldPrice: currentPrice,
+          newPrice: newPrice,
+          difference: newPrice - currentPrice,
+        });
+        newTotal += newPrice * item.quantity;
+      } else {
+        newTotal += currentPrice * item.quantity;
+      }
+    }
+
+    return {
+      valid: priceChanges.length === 0 && stockIssues.length === 0,
+      hasPriceChanges: priceChanges.length > 0,
+      priceChanges,
+      currentTotal,
+      newTotal,
+      totalDifference: newTotal - currentTotal,
+      stockIssues,
+    };
+  }
+
+  /**
+   * ==========================================================================
+   * REFRESH CART PRICES
+   * ==========================================================================
+   * Update cart dengan harga terkini dari database.
+   */
+  private async refreshCartPrices(cart: Cart): Promise<boolean> {
+    try {
+      const orderItems = this.parseCartItems(cart);
+      let hasUpdates = false;
+
+      const updatedItems = await Promise.all(
+        orderItems.map(async (item: any) => {
+          const currentProduct = await this.productModel.findByPk(item.product_id);
+          if (currentProduct && currentProduct.price !== item.price) {
+            hasUpdates = true;
+            return {
+              ...item,
+              price: currentProduct.price,
+              discount_price: currentProduct.discount_price,
+            };
+          }
+          return item;
+        }),
+      );
+
+      if (hasUpdates) {
+        await this.cartModel.update({ json_order: updatedItems }, { where: { id: cart.id } });
+        this.logger.log(`Cart ${cart.id} prices refreshed`);
+      }
+
+      return hasUpdates;
+    } catch (error) {
+      this.logger.error(`Failed to refresh cart prices: ${(error as Error).message}`);
+      return false;
+    }
+  }
+
+  /**
+   * ==========================================================================
+   * FORMAT PRICE CHANGES MESSAGE
+   * ==========================================================================
+   * Format pesan perubahan harga untuk user.
+   */
+  private formatPriceChangesMessage(validation: {
+    hasPriceChanges: boolean;
+    priceChanges: Array<{
+      product_name: string;
+      oldPrice: number;
+      newPrice: number;
+      difference: number;
+    }>;
+    currentTotal: number;
+    newTotal: number;
+    totalDifference: number;
+    stockIssues: Array<{
+      product_name: string;
+      requested: number;
+      available: number;
+    }>;
+  }): string {
+    let message = '⚠️ *Terjadi Perubahan pada Pesanan Anda*\n\n';
+
+    // Info perubahan harga
+    if (validation.hasPriceChanges) {
+      message += '*Perubahan Harga:*\n';
+      validation.priceChanges.forEach((change, idx) => {
+        const direction = change.difference > 0 ? 'naik' : 'turun';
+        message += `${idx + 1}. ${change.product_name}\n`;
+        message += `   Harga ${direction}: Rp ${change.oldPrice.toLocaleString('id-ID')} → Rp ${change.newPrice.toLocaleString('id-ID')}\n`;
+        message += `   Selisih: Rp ${Math.abs(change.difference).toLocaleString('id-ID')}\n`;
+      });
+      message += '\n';
+    }
+
+    // Info masalah stok
+    if (validation.stockIssues.length > 0) {
+      message += '*Masalah Stok:*\n';
+      validation.stockIssues.forEach((issue, idx) => {
+        message += `${idx + 1}. ${issue.product_name}\n`;
+        message += `   Diminta: ${issue.requested} keping, Tersedia: ${issue.available} keping\n`;
+      });
+      message += '\n';
+    }
+
+    // Ringkasan total
+    message += '*Ringkasan:*\n';
+    message += `Total sebelumnya: Rp ${validation.currentTotal.toLocaleString('id-ID')}\n`;
+    message += `Total saat ini: Rp ${validation.newTotal.toLocaleString('id-ID')}\n`;
+
+    if (validation.totalDifference !== 0) {
+      const direction = validation.totalDifference > 0 ? 'naik' : 'turun';
+      message += `Selisih total: Rp ${Math.abs(validation.totalDifference).toLocaleString('id-ID')} (${direction})\n`;
+    }
+
+    message += '\n_Silakan tinjau ulang pesanan Anda._';
+
+    return message;
+  }
+
+  /**
+   * ==========================================================================
+   * UPDATE CART PRICE SNAPSHOT
+   * ==========================================================================
+   * Update snapshot harga di cart setelah refresh.
+   */
+  private async updateCartPriceSnapshot(cart: Cart): Promise<void> {
+    try {
+      const orderItems = this.parseCartItems(cart);
+      const snapshot: PriceSnapshot[] = await Promise.all(
+        orderItems.map(async (item: any) => {
+          const product = await this.productModel.findByPk(item.product_id);
+          return {
+            product_id: item.product_id,
+            product_name: item.product_name,
+            price_at_creation: item.discount_price > 0 ? item.discount_price : item.price,
+            price_current: product?.price || item.price,
+            timestamp: new Date().toISOString(),
+          };
+        }),
+      );
+
+      await this.cartModel.update(
+        { original_prices_snapshot: snapshot },
+        { where: { id: cart.id } },
+      );
+    } catch (error) {
+      this.logger.error(`Failed to update price snapshot: ${(error as Error).message}`);
+    }
   }
 }

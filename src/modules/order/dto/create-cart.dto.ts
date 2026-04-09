@@ -2,14 +2,13 @@
  * ============================================================================
  * CREATE CART DTO
  * ============================================================================
- * 
+ *
  * DTO untuk membuat cart baru.
- * 
+ *
  * @author IndoGold Team
  * @version 1.0.0
  * ============================================================================
  */
-
 import { IsNumber, IsString, IsNotEmpty, IsArray, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -19,9 +18,6 @@ export class CartProductDto {
 
   @IsString()
   product_name!: string;
-
-  @IsNumber()
-  variant_id!: number;
 
   @IsString()
   variant_name!: string;

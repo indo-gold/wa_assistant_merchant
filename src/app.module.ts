@@ -3,6 +3,8 @@ import { SequelizeModule } from '@nestjs/sequelize';
 import { ScheduleModule } from '@nestjs/schedule';
 import { LoggerModule } from 'nestjs-pino';
 import { HttpModule } from '@nestjs/axios';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 /**
  * ============================================================================
  * APP MODULE - Root Module
@@ -165,11 +167,30 @@ import { allConfigs } from './config/app.config';
       }),
     }),
 
-    // 7. Shared
+    // 7. Rate Limiting
+    ThrottlerModule.forRoot([
+      {
+        name: 'short',
+        ttl: 1000,        // 1 second
+        limit: 10,        // 10 requests per second
+      },
+      {
+        name: 'medium',
+        ttl: 10000,       // 10 seconds
+        limit: 50,        // 50 requests per 10 seconds
+      },
+      {
+        name: 'long',
+        ttl: 60000,       // 1 minute
+        limit: 200,       // 200 requests per minute
+      },
+    ]),
+
+    // 8. Shared
     LoggerSharedModule,
     HttpSharedModule,
 
-    // 8. Domain Modules
+    // 9. Domain Modules
     AuthModule,
     UserModule,
     ChatModule,
@@ -184,6 +205,12 @@ import { allConfigs } from './config/app.config';
     BlastMessageModule,
     TemplateMessageModule,
     MediaMessageModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
   ],
 })
 export class AppModule {}

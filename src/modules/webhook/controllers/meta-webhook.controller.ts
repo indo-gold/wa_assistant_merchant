@@ -18,11 +18,13 @@ import { Controller, Get, Post, Query, Body, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
 import { Public } from '../../../common/decorators/public.decorator';
+import { SkipThrottle } from '../../../common/decorators/skip-throttle.decorator';
 import { MessageProcessorService } from '../services/message-processor.service';
 import { MetaWebhookPayload, WebhookVerifyQuery } from '../dto/meta-webhook.dto';
 
 @ApiTags('Webhook')
 @Controller('webhook')
+@SkipThrottle()
 export class MetaWebhookController {
   private readonly logger = new Logger(MetaWebhookController.name);
   private readonly verifyToken: string;

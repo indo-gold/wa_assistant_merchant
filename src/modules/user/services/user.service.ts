@@ -146,6 +146,35 @@ export class UserService {
 
   /**
    * ==========================================================================
+   * UNBLOCK USER
+   * ==========================================================================
+   */
+  async unblockUser(id: number): Promise<boolean> {
+    const user = await this.userModel.findByPk(id);
+    if (!user) return false;
+
+    await user.update({ status: UserStatus.ACTIVE });
+    this.logger.log(`User unblocked: ${user.phone_number}`);
+    return true;
+  }
+
+  /**
+   * ==========================================================================
+   * UPDATE USER STATUS
+   * ==========================================================================
+   * Update status user (active, block, silent_bot)
+   */
+  async updateStatus(id: number, status: UserStatus): Promise<User | null> {
+    const user = await this.userModel.findByPk(id);
+    if (!user) return null;
+
+    await user.update({ status });
+    this.logger.log(`User ${user.phone_number} status updated to: ${status}`);
+    return user;
+  }
+
+  /**
+   * ==========================================================================
    * CHECK SPAM
    * ==========================================================================
    * Check apakah user melakukan spam (>50 messages dalam 5 menit).
