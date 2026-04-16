@@ -39,8 +39,8 @@ module.exports = {
         defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
       },
     }, {
-    charset: 'latin1',
-    engine: 'InnoDB',
+      charset: 'latin1',
+      engine: 'InnoDB',
     });
   },
 

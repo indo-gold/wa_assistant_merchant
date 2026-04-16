@@ -14,7 +14,7 @@ module.exports = {
         allowNull: false,
       },
       "value": {
-        type: Sequelize.TEXT,
+        type: Sequelize.TEXT('long'),
         allowNull: false,
       },
       "created_at": {

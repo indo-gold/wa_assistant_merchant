@@ -16,7 +16,7 @@ module.exports = {
       "penalty_until": {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
+        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
       },
       "status": {
         type: Sequelize.ENUM('running','end'),
@@ -28,8 +28,8 @@ module.exports = {
         allowNull: false,
       },
     }, {
-    charset: 'latin1',
-    engine: 'InnoDB',
+      charset: 'latin1',
+      engine: 'InnoDB',
     });
   },
 

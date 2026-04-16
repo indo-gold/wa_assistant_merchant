@@ -28,12 +28,14 @@ module.exports = {
       "json": {
         type: Sequelize.TEXT('long'),
         allowNull: false,
+        charset: 'utf8mb4',
+        collate: 'utf8mb4_bin',
       },
       "meta_response": {
-        type: Sequelize.TEXT,
+        type: Sequelize.TEXT('long'),
       },
       "media_url": {
-        type: Sequelize.TEXT,
+        type: Sequelize.TEXT('long'),
         allowNull: false,
       },
       "created_at": {

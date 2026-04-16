@@ -235,35 +235,4 @@ export class ToolRegistryService implements OnModuleInit {
     }
   }
 
-  /**
-   * ==========================================================================
-   * HAS TOOL
-   * ==========================================================================
-   * Check apakah tool tersedia.
-   */
-  hasTool(name: string): boolean {
-    return this.tools.has(name);
-  }
-
-  /**
-   * ==========================================================================
-   * REMOVE TOOL
-   * ==========================================================================
-   * Remove tool dari registry.
-   */
-  removeTool(name: string): boolean {
-    return this.tools.delete(name);
-  }
-
-  /**
-   * ==========================================================================
-   * RELOAD TOOLS
-   * ==========================================================================
-   * Reload tools dari database (useful setelah update agent parameters)
-   */
-  async reloadTools(): Promise<void> {
-    this.tools.clear();
-    await this.loadToolsFromDatabase();
-    this.logger.log(`🔄 Reloaded ${this.tools.size} tools from database`);
-  }
 }

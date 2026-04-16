@@ -54,6 +54,8 @@ module.exports = {
       "payment_details": {
         type: Sequelize.TEXT('long'),
         comment: "Detail pembayaran (VA number, QR string, etc)",
+        charset: 'utf8mb4',
+        collate: 'utf8mb4_bin',
       },
       "expiry_date": {
         type: Sequelize.DATE,
@@ -66,6 +68,8 @@ module.exports = {
       "xendit_callback_payload": {
         type: Sequelize.TEXT('long'),
         comment: "Raw payload dari Xendit webhook",
+        charset: 'utf8mb4',
+        collate: 'utf8mb4_bin',
       },
       "created_at": {
         type: Sequelize.DATE,
@@ -73,7 +77,7 @@ module.exports = {
       },
       "updated_at": {
         type: Sequelize.DATE,
-        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
+        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
       },
       "fee_type": {
         type: Sequelize.ENUM('percent','flat'),
@@ -204,7 +208,7 @@ module.exports = {
       /* ignore if doesn't exist */
     }
     try {
-      await queryInterface.removeIndex('order_payments', 'xendit_external_id');
+      await queryInterface.removeConstraint('order_payments', 'xendit_external_id');
     } catch (e) {
       /* ignore if doesn't exist */
     }

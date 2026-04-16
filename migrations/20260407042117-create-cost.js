@@ -36,11 +36,13 @@ module.exports = {
         allowNull: false,
       },
       "messages_payload": {
-        type: Sequelize.TEXT,
+        type: Sequelize.TEXT('long'),
       },
       "json_data": {
         type: Sequelize.TEXT('long'),
         allowNull: false,
+        charset: 'utf8mb4',
+        collate: 'utf8mb4_bin',
       },
       "estimate_cost": {
         type: Sequelize.FLOAT,

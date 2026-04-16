@@ -1,0 +1,11 @@
+CREATE TABLE `products_history` (
+  `id` int(11) NOT NULL,
+  `product_id` int(11) NOT NULL,
+  `product_name` varchar(50) NOT NULL,
+  `variant_id` int(11) NOT NULL,
+  `variant_name` varchar(50) NOT NULL,
+  `denomination` double NOT NULL,
+  `price` float NOT NULL,
+  `created_at` datetime NOT NULL,
+  `updated_at` datetime NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;

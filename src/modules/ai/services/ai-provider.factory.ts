@@ -108,43 +108,4 @@ export class AiProviderFactory {
     return provider;
   }
 
-  /**
-   * ==========================================================================
-   * GET DEFAULT PROVIDER
-   * ==========================================================================
-   * Get default provider (OpenAI)
-   */
-  getDefaultProvider(): BaseAiProvider {
-    // Try OpenAI first, then any available provider
-    if (this.providers.has('openai')) {
-      return this.providers.get('openai')!;
-    }
-    
-    const firstProvider = this.providers.values().next().value;
-    if (firstProvider) {
-      return firstProvider;
-    }
-    
-    throw new Error('No AI provider configured');
-  }
-
-  /**
-   * ==========================================================================
-   * HAS PROVIDER
-   * ==========================================================================
-   * Check if provider is available
-   */
-  hasProvider(type: AiProviderType): boolean {
-    return this.providers.has(type);
-  }
-
-  /**
-   * ==========================================================================
-   * GET AVAILABLE PROVIDERS
-   * ==========================================================================
-   * Get list of available provider types
-   */
-  getAvailableProviders(): AiProviderType[] {
-    return Array.from(this.providers.keys());
-  }
 }

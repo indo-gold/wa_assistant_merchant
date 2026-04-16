@@ -32,16 +32,15 @@ module.exports = {
         type: Sequelize.DATE,
       },
     }, {
-    charset: 'utf8mb4',
-    collate: 'utf8mb4_unicode_ci',
-    engine: 'InnoDB',
+      charset: 'utf8mb4',
+      collate: 'utf8mb4_unicode_ci',
+      engine: 'InnoDB',
     });
     try {
-      await queryInterface.addConstraint('users', {
-      fields: ["phone_number"],
-      type: 'unique',
-      name: 'phone_number'
-    });
+      await queryInterface.addIndex('users', ["phone_number"], {
+        name: 'phone_number',
+        unique: true,
+      });
     } catch (e) {
       const msg = (e && e.message) || '';
       if (!msg.includes('Duplicate key name') && !msg.includes('already exists') && !msg.includes('errno: 121') && !msg.includes('Duplicate key on write or update')) throw e;

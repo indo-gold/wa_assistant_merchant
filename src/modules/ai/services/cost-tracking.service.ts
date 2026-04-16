@@ -175,36 +175,4 @@ export class CostTrackingService {
     }
   }
 
-  /**
-   * ==========================================================================
-   * GET TOTAL COST BY DATE RANGE
-   * ==========================================================================
-   */
-  async getTotalCostByDateRange(
-    startDate: Date,
-    endDate: Date,
-  ): Promise<number> {
-    const result = await this.costModel.sum('estimate_cost', {
-      where: {
-        timestamp: {
-          [Op.between]: [startDate, endDate],
-        },
-      },
-    });
-
-    return result || 0;
-  }
-
-  /**
-   * ==========================================================================
-   * GET COST BY USER
-   * ==========================================================================
-   */
-  async getCostByUser(userId: number): Promise<number> {
-    const result = await this.costModel.sum('estimate_cost', {
-      where: { user_id: userId },
-    });
-
-    return result || 0;
-  }
 }

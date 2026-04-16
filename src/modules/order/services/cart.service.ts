@@ -79,39 +79,6 @@ export class CartService {
 
   /**
    * ==========================================================================
-   * GET PENDING CART BY USER
-   * ==========================================================================
-   * Get cart pending terakhir untuk user.
-   * Akan mengembalikan null jika cart sudah expired.
-   */
-  async getPendingCartByUser(userId: number): Promise<Cart | null> {
-    const cart = await this.cartModel.findOne({
-      where: {
-        user_id: userId,
-        status_order: CartStatus.PENDING,
-        expires_at: {
-          [Op.gt]: new Date(), // Belum expired
-        },
-      },
-      order: [['timestamp', 'DESC']],
-    });
-
-    return cart;
-  }
-
-  /**
-   * ==========================================================================
-   * GET CART BY WA MESSAGE ID
-   * ==========================================================================
-   */
-  async getCartByWaMessageId(waMessageId: string): Promise<Cart | null> {
-    return this.cartModel.findOne({
-      where: { wa_message_id: waMessageId },
-    });
-  }
-
-  /**
-   * ==========================================================================
    * LOCK CART PRICES
    * ==========================================================================
    * Lock harga cart saat user melihat rincian pesanan.
@@ -226,33 +193,6 @@ export class CartService {
 
   /**
    * ==========================================================================
-   * APPROVE CART
-   * ==========================================================================
-   */
-  async approveCart(cartId: number): Promise<boolean> {
-    return this.updateCartStatus(cartId, CartStatus.APPROVED);
-  }
-
-  /**
-   * ==========================================================================
-   * UPDATE WA MESSAGE ID
-   * ==========================================================================
-   * Update WA message ID untuk cart (setelah kirim interactive message).
-   */
-  async updateWaMessageId(
-    cartId: number,
-    waMessageId: string,
-  ): Promise<boolean> {
-    const [updated] = await this.cartModel.update(
-      { wa_message_id: waMessageId },
-      { where: { id: cartId } },
-    );
-
-    return updated > 0;
-  }
-
-  /**
-   * ==========================================================================
    * UPDATE FOLLOW UP
    * ==========================================================================
    */
@@ -292,81 +232,4 @@ export class CartService {
     });
   }
 
-  /**
-   * ==========================================================================
-   * GET EXPIRED CARTS
-   * ==========================================================================
-   * Get semua cart yang sudah expired tapi status masih pending
-   */
-  async getExpiredCarts(): Promise<Cart[]> {
-    return this.cartModel.findAll({
-      where: {
-        status_order: CartStatus.PENDING,
-        expires_at: {
-          [Op.lt]: new Date(),
-        },
-      },
-    });
   }
-
-  /**
-   * ==========================================================================
-   * GET REMAINING MINUTES
-   * ==========================================================================
-   * Get sisa waktu cart dalam menit
-   */
-  getRemainingMinutes(cart: Cart): number {
-    return cart.getRemainingMinutes();
-  }
-
-  /**
-   * ==========================================================================
-   * AUTO EXPIRE CARTS
-   * ==========================================================================
-   * Tandai semua cart yang sudah expired sebagai expired
-   */
-  async autoExpireCarts(): Promise<number> {
-    const [updatedCount] = await this.cartModel.update(
-      { status_order: CartStatus.EXPIRED },
-      {
-        where: {
-          status_order: CartStatus.PENDING,
-          expires_at: {
-            [Op.lt]: new Date(),
-          },
-        },
-      },
-    );
-
-    if (updatedCount > 0) {
-      this.logger.log(`Auto-expired ${updatedCount} carts`);
-    }
-
-    return updatedCount;
-  }
-
-  /**
-   * ==========================================================================
-   * EXTEND CART EXPIRY
-   * ==========================================================================
-   * Perpanjang masa berlaku cart (misal setelah follow-up)
-   */
-  async extendCartExpiry(cartId: number, additionalMinutes: number = 5): Promise<boolean> {
-    const cart = await this.getCartById(cartId);
-    if (!cart) return false;
-
-    const currentExpiry = cart.expires_at || new Date();
-    const newExpiry = new Date(currentExpiry.getTime() + additionalMinutes * 60 * 1000);
-
-    const [updated] = await this.cartModel.update(
-      { expires_at: newExpiry },
-      { where: { id: cartId } },
-    );
-
-    if (updated > 0) {
-      this.logger.log(`Cart ${cartId} expiry extended to ${newExpiry.toISOString()}`);
-    }
-
-    return updated > 0;
-  }
-}

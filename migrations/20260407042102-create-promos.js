@@ -74,7 +74,7 @@ module.exports = {
       },
       "updated_at": {
         type: Sequelize.DATE,
-        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
+        defaultValue: Sequelize.literal("NULL ON UPDATE CURRENT_TIMESTAMP"),
       },
     }, {
     charset: 'utf8mb4',

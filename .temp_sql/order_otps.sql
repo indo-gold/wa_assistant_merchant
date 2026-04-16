@@ -1,0 +1,12 @@
+CREATE TABLE `order_otps` (
+  `id` int(11) NOT NULL,
+  `order_id` int(11) NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `payment_id` int(11) NOT NULL,
+  `otp_code` varchar(10) NOT NULL,
+  `purpose` enum('pickup_verification','order_confirmation') DEFAULT 'pickup_verification',
+  `status` enum('active','used','expired') DEFAULT 'active',
+  `expires_at` datetime NOT NULL,
+  `verified_at` datetime DEFAULT NULL,
+  `created_at` datetime DEFAULT current_timestamp()
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

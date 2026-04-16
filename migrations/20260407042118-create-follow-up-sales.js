@@ -29,8 +29,8 @@ module.exports = {
         allowNull: false,
       },
     }, {
-    charset: 'latin1',
-    engine: 'InnoDB',
+      charset: 'latin1',
+      engine: 'InnoDB',
     });
   },
 

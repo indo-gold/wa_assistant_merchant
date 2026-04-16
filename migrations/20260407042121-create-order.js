@@ -28,10 +28,10 @@ module.exports = {
         allowNull: false,
       },
       "payment_status": {
-        type: Sequelize.ENUM('pending','paid','failed'),
+        type: Sequelize.ENUM('pending','paid','failed','cancelled'),
         allowNull: false,
         defaultValue: "pending",
-        comment: "Status pembayaran: pending, paid, failed",
+        comment: "Status pembayaran: pending, paid, failed, cancelled",
       },
       "payment_id": {
         type: Sequelize.INTEGER,
@@ -57,15 +57,31 @@ module.exports = {
       "updated_at": {
         type: Sequelize.DATE,
       },
+      "cancelled_at": {
+        type: Sequelize.DATE,
+        comment: "Waktu order dibatalkan (jika status failed/cancelled)",
+      },
+      "cancellation_reason": {
+        type: Sequelize.STRING(255),
+        comment: "Alasan pembatalan order",
+      },
     }, {
-    charset: 'utf8mb4',
-    collate: 'utf8mb4_unicode_ci',
-    engine: 'InnoDB',
+      charset: 'utf8mb4',
+      collate: 'utf8mb4_unicode_ci',
+      engine: 'InnoDB',
     });
     try {
       await queryInterface.addIndex('order', ["user_id"], {
-      name: 'user_id'
-    });
+        name: 'user_id'
+      });
+    } catch (e) {
+      const msg = (e && e.message) || '';
+      if (!msg.includes('Duplicate key name') && !msg.includes('already exists') && !msg.includes('errno: 121') && !msg.includes('Duplicate key on write or update')) throw e;
+    }
+    try {
+      await queryInterface.addIndex('order', ["payment_status", "cancelled_at"], {
+        name: 'idx_order_status_cancelled'
+      });
     } catch (e) {
       const msg = (e && e.message) || '';
       if (!msg.includes('Duplicate key name') && !msg.includes('already exists') && !msg.includes('errno: 121') && !msg.includes('Duplicate key on write or update')) throw e;
@@ -73,6 +89,11 @@ module.exports = {
   },
 
   async down(queryInterface, Sequelize) {
+    try {
+      await queryInterface.removeIndex('order', 'idx_order_status_cancelled');
+    } catch (e) {
+      /* ignore if doesn't exist */
+    }
     try {
       await queryInterface.removeIndex('order', 'user_id');
     } catch (e) {

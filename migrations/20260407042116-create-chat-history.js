@@ -28,7 +28,7 @@ module.exports = {
         defaultValue: "text",
       },
       "role": {
-        type: Sequelize.STRING(255),
+        type: Sequelize.ENUM('assistant','user'),
         allowNull: false,
       },
       "status": {
@@ -37,6 +37,8 @@ module.exports = {
       },
       "json_data": {
         type: Sequelize.TEXT('long'),
+        charset: 'utf8mb4',
+        collate: 'utf8mb4_bin',
       },
       "admin_id": {
         type: Sequelize.INTEGER,
@@ -53,39 +55,39 @@ module.exports = {
         type: Sequelize.TEXT,
       },
     }, {
-    charset: 'utf8mb4',
-    collate: 'utf8mb4_unicode_ci',
-    engine: 'InnoDB',
+      charset: 'utf8mb4',
+      collate: 'utf8mb4_unicode_ci',
+      engine: 'InnoDB',
     });
     try {
       await queryInterface.addIndex('chat_history', ["user_id"], {
-      name: 'user_id'
-    });
+        name: 'user_id'
+      });
     } catch (e) {
       const msg = (e && e.message) || '';
       if (!msg.includes('Duplicate key name') && !msg.includes('already exists') && !msg.includes('errno: 121') && !msg.includes('Duplicate key on write or update')) throw e;
     }
     try {
       await queryInterface.addIndex('chat_history', ["processed_content"], {
-      name: 'idx_chat_history_processed_content',
-      type: 'FULLTEXT'
-    });
+        name: 'idx_chat_history_processed_content',
+        using: 'FULLTEXT',
+      });
     } catch (e) {
       const msg = (e && e.message) || '';
       if (!msg.includes('Duplicate key name') && !msg.includes('already exists') && !msg.includes('errno: 121') && !msg.includes('Duplicate key on write or update')) throw e;
     }
     try {
       await queryInterface.addConstraint('chat_history', {
-      fields: ["user_id"],
-      type: 'foreign key',
-      name: 'chat_history_ibfk_1',
-      references: {
-        table: 'users',
-        field: 'id'
-      },
-      onDelete: 'NO ACTION',
-      onUpdate: 'CASCADE'
-    });
+        fields: ["user_id"],
+        type: 'foreign key',
+        name: 'chat_history_ibfk_1',
+        references: {
+          table: 'users',
+          field: 'id'
+        },
+        onDelete: 'NO ACTION',
+        onUpdate: 'CASCADE'
+      });
     } catch (e) {
       const msg = (e && e.message) || '';
       if (!msg.includes('Duplicate key name') && !msg.includes('already exists') && !msg.includes('errno: 121') && !msg.includes('Duplicate key on write or update')) throw e;
@@ -99,12 +101,12 @@ module.exports = {
       /* ignore if doesn't exist */
     }
     try {
-      await queryInterface.removeIndex('chat_history', 'user_id');
+      await queryInterface.removeIndex('chat_history', 'idx_chat_history_processed_content');
     } catch (e) {
       /* ignore if doesn't exist */
     }
     try {
-      await queryInterface.removeIndex('chat_history', 'idx_chat_history_processed_content');
+      await queryInterface.removeIndex('chat_history', 'user_id');
     } catch (e) {
       /* ignore if doesn't exist */
     }

@@ -26,6 +26,8 @@ module.exports = {
       },
       "parameters": {
         type: Sequelize.TEXT('long'),
+        charset: 'utf8mb4',
+        collate: 'utf8mb4_bin',
       },
       "instruction": {
         type: Sequelize.TEXT,

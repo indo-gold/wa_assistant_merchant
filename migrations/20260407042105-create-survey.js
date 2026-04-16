@@ -20,6 +20,8 @@ module.exports = {
       "text": {
         type: Sequelize.TEXT,
         allowNull: false,
+        charset: 'utf8mb4',
+        collate: 'utf8mb4_unicode_ci',
       },
       "time": {
         type: Sequelize.INTEGER,
@@ -49,15 +51,14 @@ module.exports = {
         defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
       },
     }, {
-    charset: 'latin1',
-    engine: 'InnoDB',
+      charset: 'latin1',
+      engine: 'InnoDB',
     });
     try {
-      await queryInterface.addConstraint('survey', {
-      fields: ["title"],
-      type: 'unique',
-      name: 'title'
-    });
+      await queryInterface.addIndex('survey', ["title"], {
+        name: 'title',
+        unique: true,
+      });
     } catch (e) {
       const msg = (e && e.message) || '';
       if (!msg.includes('Duplicate key name') && !msg.includes('already exists') && !msg.includes('errno: 121') && !msg.includes('Duplicate key on write or update')) throw e;

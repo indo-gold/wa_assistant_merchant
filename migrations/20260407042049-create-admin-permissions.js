@@ -2,28 +2,24 @@
 
 module.exports = {
   async up(queryInterface, Sequelize) {
-    await queryInterface.createTable('admin_assign_chat', {
+    await queryInterface.createTable('admin_permissions', {
       "id": {
         type: Sequelize.INTEGER,
         allowNull: false,
         autoIncrement: true,
         primaryKey: true,
       },
-      "assigner_chat_id": {
-        type: Sequelize.INTEGER,
+      "resource": {
+        type: Sequelize.STRING(50),
         allowNull: false,
       },
-      "admin_id": {
-        type: Sequelize.INTEGER,
+      "action": {
+        type: Sequelize.STRING(50),
         allowNull: false,
       },
-      "user_id": {
-        type: Sequelize.INTEGER,
-        allowNull: false,
-      },
-      "status": {
-        type: Sequelize.ENUM('allow','revoke'),
-        allowNull: false,
+      "description": {
+        type: Sequelize.STRING(255),
+        allowNull: true,
       },
       "created_at": {
         type: Sequelize.DATE,
@@ -33,18 +29,17 @@ module.exports = {
       "updated_at": {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
+        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
       },
     }, {
-    charset: 'latin1',
-    engine: 'InnoDB',
+      charset: 'utf8mb4',
+      engine: 'InnoDB',
     });
     try {
-      await queryInterface.addConstraint('admin_assign_chat', {
-      fields: ["user_id"],
-      type: 'unique',
-      name: 'user_id'
-    });
+      await queryInterface.addIndex('admin_permissions', ["resource", "action"], {
+        name: 'resource_action',
+        unique: true,
+      });
     } catch (e) {
       const msg = (e && e.message) || '';
       if (!msg.includes('Duplicate key name') && !msg.includes('already exists') && !msg.includes('errno: 121') && !msg.includes('Duplicate key on write or update')) throw e;
@@ -53,10 +48,10 @@ module.exports = {
 
   async down(queryInterface, Sequelize) {
     try {
-      await queryInterface.removeIndex('admin_assign_chat', 'user_id');
+      await queryInterface.removeIndex('admin_permissions', 'resource_action');
     } catch (e) {
       /* ignore if doesn't exist */
     }
-    await queryInterface.dropTable('admin_assign_chat');
+    await queryInterface.dropTable('admin_permissions');
   }
 };

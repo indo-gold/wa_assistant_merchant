@@ -301,54 +301,6 @@ export class XenditService {
 
   /**
    * ==========================================================================
-   * GET INVOICE BY ID
-   * ==========================================================================
-   */
-  async getInvoice(invoiceId: string): Promise<XenditInvoice> {
-    try {
-      const url = `${this.apiUrl}/v2/invoices/${invoiceId}`;
-
-      const headers: Record<string, string> = {
-        Authorization: `Basic ${Buffer.from(this.apiKey + ':').toString('base64')}`,
-      };
-
-      const response = await firstValueFrom(this.httpService.get<XenditInvoice>(url, { headers }));
-
-      return response.data;
-    } catch (error) {
-      this.handleError('Failed to get invoice', error as AxiosError);
-      throw error;
-    }
-  }
-
-  /**
-   * ==========================================================================
-   * EXPIRE INVOICE
-   * ==========================================================================
-   * Expire invoice yang masih pending
-   */
-  async expireInvoice(invoiceId: string): Promise<XenditInvoice> {
-    try {
-      const url = `${this.apiUrl}/invoices/${invoiceId}/expire!`;
-
-      const headers: Record<string, string> = {
-        Authorization: `Basic ${Buffer.from(this.apiKey + ':').toString('base64')}`,
-      };
-
-      const response = await firstValueFrom(
-        this.httpService.post<XenditInvoice>(url, {}, { headers }),
-      );
-
-      this.logger.log(`Invoice expired: ${invoiceId}`);
-      return response.data;
-    } catch (error) {
-      this.handleError('Failed to expire invoice', error as AxiosError);
-      throw error;
-    }
-  }
-
-  /**
-   * ==========================================================================
    * VERIFY WEBHOOK SIGNATURE
    * ==========================================================================
    * Verifikasi bahwa webhook berasal dari Xendit

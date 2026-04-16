@@ -1,0 +1,20 @@
+CREATE TABLE `meta_blast_message` (
+  `id` int(11) NOT NULL,
+  `title` varchar(255) NOT NULL,
+  `template_id` int(11) NOT NULL,
+  `status` enum('active','inactive') NOT NULL,
+  `execute_date` datetime DEFAULT NULL,
+  `is_send_now` tinyint(4) NOT NULL DEFAULT 0,
+  `upload_recipients_id` int(11) NOT NULL,
+  `upload_path` text NOT NULL,
+  `recipients_loaded` tinyint(1) DEFAULT 0,
+  `total_recipients` int(11) NOT NULL DEFAULT 0,
+  `sent_count` int(11) NOT NULL DEFAULT 0,
+  `delivered_count` int(11) NOT NULL DEFAULT 0,
+  `read_count` int(11) NOT NULL DEFAULT 0,
+  `failed_count` int(11) NOT NULL DEFAULT 0,
+  `last_activity_at` datetime DEFAULT NULL,
+  `created_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `updated_at` datetime NOT NULL DEFAULT current_timestamp(),
+  `processing_status` enum('scheduled','processing','completed','error','paused') NOT NULL DEFAULT 'scheduled'
+) ENGINE=InnoDB DEFAULT CHARSET=latin1;

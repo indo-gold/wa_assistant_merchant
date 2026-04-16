@@ -36,13 +36,15 @@ module.exports = {
       },
       "reminder": {
         type: Sequelize.TEXT('long'),
+        charset: 'utf8mb4',
+        collate: 'utf8mb4_bin',
       },
       "timestamp": {
         type: Sequelize.DATE,
       },
     }, {
-    charset: 'latin1',
-    engine: 'InnoDB',
+      charset: 'latin1',
+      engine: 'InnoDB',
     });
   },
 

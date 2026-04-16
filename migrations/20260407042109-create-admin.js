@@ -37,18 +37,17 @@ module.exports = {
       "updated_at": {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
+        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
       },
     }, {
-    charset: 'latin1',
-    engine: 'InnoDB',
+      charset: 'latin1',
+      engine: 'InnoDB',
     });
     try {
-      await queryInterface.addConstraint('admin', {
-      fields: ["email"],
-      type: 'unique',
-      name: 'email'
-    });
+      await queryInterface.addIndex('admin', ["email"], {
+        name: 'email',
+        unique: true,
+      });
     } catch (e) {
       const msg = (e && e.message) || '';
       if (!msg.includes('Duplicate key name') && !msg.includes('already exists') && !msg.includes('errno: 121') && !msg.includes('Duplicate key on write or update')) throw e;

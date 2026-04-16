@@ -181,17 +181,6 @@ export class OrderService {
 
   /**
    * ==========================================================================
-   * GET ORDER BY PAYMENT ID
-   * ==========================================================================
-   */
-  async getOrderByPaymentId(paymentId: number): Promise<Order | null> {
-    return this.orderModel.findOne({
-      where: { payment_id: paymentId },
-    });
-  }
-
-  /**
-   * ==========================================================================
    * FORMAT SUCCESS PAYMENT MESSAGE WITH OTP
    * ==========================================================================
    * Format pesan sukses pembayaran dengan kode OTP
@@ -217,23 +206,6 @@ export class OrderService {
       `Jangan bagikan kode ini kepada siapapun!\n\n` +
       `Jika ada pertanyaan, silakan hubungi customer service kami.`
     );
-  }
-
-  /**
-   * ==========================================================================
-   * GET PENDING PAYMENTS
-   * ==========================================================================
-   * Ambil payment yang masih pending dan sudah expired
-   */
-  async getExpiredPendingPayments(): Promise<OrderPayment[]> {
-    return this.orderPaymentModel.findAll({
-      where: {
-        status: PaymentStatus.PENDING,
-        expiry_date: {
-          [Op.lt]: new Date(),
-        },
-      },
-    });
   }
 
   /**
@@ -566,27 +538,6 @@ export class OrderService {
 
   /**
    * ==========================================================================
-   * CANCEL ORDER
-   * ==========================================================================
-   * Cancel order dan update cart status.
-   */
-  async cancelOrder(cartId: number): Promise<boolean> {
-    try {
-      await this.cartModel.update(
-        { status_order: CartStatus.CANCELLED },
-        { where: { id: cartId } },
-      );
-
-      this.logger.log(`Order cancelled for cart: ${cartId}`);
-      return true;
-    } catch (error) {
-      this.logger.error(`Failed to cancel order: ${(error as Error).message}`);
-      return false;
-    }
-  }
-
-  /**
-   * ==========================================================================
    * PROCESS PAYMENT EXPIRED
    * ==========================================================================
    * Handler untuk webhook Xendit saat pembayaran expired.
@@ -695,28 +646,6 @@ export class OrderService {
 
   /**
    * ==========================================================================
-   * UPDATE ORDER STATUS
-   * ==========================================================================
-   */
-  async updateOrderStatus(invoiceId: string, _status: string): Promise<boolean> {
-    // Status column removed - using payment_status instead
-    this.logger.warn(`updateOrderStatus called but status column removed: ${invoiceId}`);
-    return true;
-  }
-
-  /**
-   * ==========================================================================
-   * GET ORDER BY INVOICE LINK
-   * ==========================================================================
-   */
-  async getOrderByInvoiceLink(invoiceLink: string): Promise<Order | null> {
-    return this.orderModel.findOne({
-      where: { link_invoice: invoiceLink },
-    });
-  }
-
-  /**
-   * ==========================================================================
    * GET ORDERS FOR FOLLOW UP
    * ==========================================================================
    * Get orders yang perlu di-follow up (belum checkout setelah 2 jam).
@@ -737,29 +666,4 @@ export class OrderService {
     });
   }
 
-  /**
-   * ==========================================================================
-   * GENERATE ORDER NUMBER
-   * ==========================================================================
-   * Generate nomor order unik.
-   */
-  async generateOrderNumber(): Promise<string> {
-    const date = new Date();
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-
-    const todayStr = `${year}-${month}-${day}`;
-
-    const countToday = await this.orderModel.count({
-      where: {
-        [Op.and]: [Sequelize.where(Sequelize.fn('DATE', Sequelize.col('created_at')), todayStr)],
-      },
-    });
-
-    const orderPrefix = `ORD${year}${month}${day}`;
-    const orderNumber = String(countToday + 1).padStart(4, '0');
-
-    return `${orderPrefix}${orderNumber}`;
   }
-}

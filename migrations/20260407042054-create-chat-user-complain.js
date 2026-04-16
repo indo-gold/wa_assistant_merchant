@@ -21,8 +21,8 @@ module.exports = {
         type: Sequelize.DATE,
       },
     }, {
-    charset: 'latin1',
-    engine: 'InnoDB',
+      charset: 'latin1',
+      engine: 'InnoDB',
     });
   },
 

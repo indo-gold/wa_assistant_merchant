@@ -13,6 +13,9 @@ module.exports = {
         type: Sequelize.INTEGER,
         allowNull: false,
       },
+      "order_id": {
+        type: Sequelize.INTEGER,
+      },
       "nik": {
         type: Sequelize.STRING(255),
       },
@@ -83,41 +86,58 @@ module.exports = {
       "updated_at": {
         type: Sequelize.DATE,
         allowNull: false,
-        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP"),
+        defaultValue: Sequelize.literal("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
       },
     }, {
-    charset: 'utf8mb4',
-    collate: 'utf8mb4_unicode_ci',
-    engine: 'InnoDB',
+      charset: 'utf8mb4',
+      collate: 'utf8mb4_unicode_ci',
+      engine: 'InnoDB',
     });
     try {
       await queryInterface.addIndex('ktp_verifications', ["user_id"], {
-      name: 'idx_ktp_verifications_user_id'
-    });
+        name: 'idx_ktp_verifications_user_id'
+      });
     } catch (e) {
       const msg = (e && e.message) || '';
       if (!msg.includes('Duplicate key name') && !msg.includes('already exists') && !msg.includes('errno: 121') && !msg.includes('Duplicate key on write or update')) throw e;
     }
     try {
       await queryInterface.addIndex('ktp_verifications', ["nik"], {
-      name: 'idx_ktp_verifications_nik'
-    });
+        name: 'idx_ktp_verifications_nik'
+      });
+    } catch (e) {
+      const msg = (e && e.message) || '';
+      if (!msg.includes('Duplicate key name') && !msg.includes('already exists') && !msg.includes('errno: 121') && !msg.includes('Duplicate key on write or update')) throw e;
+    }
+    try {
+      await queryInterface.addIndex('ktp_verifications', ["order_id"], {
+        name: 'idx_order_id'
+      });
+    } catch (e) {
+      const msg = (e && e.message) || '';
+      if (!msg.includes('Duplicate key name') && !msg.includes('already exists') && !msg.includes('errno: 121') && !msg.includes('Duplicate key on write or update')) throw e;
+    }
+    try {
+      await queryInterface.addIndex('ktp_verifications', ["order_id"], {
+        name: 'unique_order_ktp',
+        unique: true,
+      });
     } catch (e) {
       const msg = (e && e.message) || '';
       if (!msg.includes('Duplicate key name') && !msg.includes('already exists') && !msg.includes('errno: 121') && !msg.includes('Duplicate key on write or update')) throw e;
     }
     try {
       await queryInterface.addConstraint('ktp_verifications', {
-      fields: ["user_id"],
-      type: 'foreign key',
-      name: 'fk_ktp_verifications_user_id',
-      references: {
-        table: 'users',
-        field: 'id'
-      },
-      onDelete: 'CASCADE',
-      onUpdate: 'CASCADE'
-    });
+        fields: ["user_id"],
+        type: 'foreign key',
+        name: 'fk_ktp_verifications_user_id',
+        references: {
+          table: 'users',
+          field: 'id'
+        },
+        onDelete: 'CASCADE',
+        onUpdate: 'CASCADE'
+      });
     } catch (e) {
       const msg = (e && e.message) || '';
       if (!msg.includes('Duplicate key name') && !msg.includes('already exists') && !msg.includes('errno: 121') && !msg.includes('Duplicate key on write or update')) throw e;
@@ -131,12 +151,22 @@ module.exports = {
       /* ignore if doesn't exist */
     }
     try {
-      await queryInterface.removeIndex('ktp_verifications', 'idx_ktp_verifications_user_id');
+      await queryInterface.removeIndex('ktp_verifications', 'unique_order_ktp');
+    } catch (e) {
+      /* ignore if doesn't exist */
+    }
+    try {
+      await queryInterface.removeIndex('ktp_verifications', 'idx_order_id');
     } catch (e) {
       /* ignore if doesn't exist */
     }
     try {
       await queryInterface.removeIndex('ktp_verifications', 'idx_ktp_verifications_nik');
+    } catch (e) {
+      /* ignore if doesn't exist */
+    }
+    try {
+      await queryInterface.removeIndex('ktp_verifications', 'idx_ktp_verifications_user_id');
     } catch (e) {
       /* ignore if doesn't exist */
     }

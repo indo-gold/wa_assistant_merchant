@@ -18,6 +18,11 @@ module.exports = {
           type: Sequelize.STRING(50),
           allowNull: false,
         },
+        variant_id: {
+          type: Sequelize.INTEGER,
+          allowNull: false,
+          primaryKey: true,
+        },
         variant_name: {
           type: Sequelize.STRING(50),
           allowNull: false,
@@ -106,5 +111,5 @@ module.exports = {
       /* ignore if doesn't exist */
     }
     await queryInterface.dropTable('products_history');
-  },
+  }
 };
