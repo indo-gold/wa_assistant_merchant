@@ -46,19 +46,40 @@ export class GroqProvider extends BaseAiProvider {
 
       // Groq API defaults tool_choice to 'none' in some cases, which causes
       // 400 errors when the model tries to call a tool. We must explicitly
-      // set tool_choice to 'auto' whenever tools are present OR when the
-      // conversation history contains tool context.
-      if (request.tools?.length > 0 || hasToolContext) {
+      // set tool_choice when tools are present in the request.
+      //
+      // Note: we only set tool_choice here when tools are actually provided.
+      // When there is only tool context (e.g. natural response after tool
+      // execution) without tools, we leave tool_choice unset to avoid forcing
+      // the model to call non-existent tools.
+      if (request.tools?.length > 0) {
         if (request.tool_choice && request.tool_choice !== 'none') {
           body.tool_choice = request.tool_choice;
         } else {
           body.tool_choice = 'auto';
         }
+      } else if (hasToolContext && request.tool_choice && request.tool_choice !== 'none') {
+        // Conversation has tool context but no tools are being offered now.
+        // Don't force 'required' because there's nothing to call.
+        body.tool_choice = request.tool_choice === 'required' ? 'auto' : request.tool_choice;
       }
 
-      const response = await this.client.chat.completions.create(body);
-
-      return this.mapResponse(response);
+      try {
+        const response = await this.client.chat.completions.create(body);
+        return this.mapResponse(response);
+      } catch (error: any) {
+        const msg = error?.message || '';
+        // Some Groq-hosted models may advertise support for tool_choice: required
+        // but occasionally fail to emit a tool call. In that case we retry once
+        // with 'auto' so the conversation can continue gracefully.
+        if (body.tool_choice === 'required' && msg.includes('Tool choice is required, but model did not call a tool')) {
+          this.logger.warn('Groq model failed to call tool with tool_choice: required. Retrying with auto.');
+          body.tool_choice = 'auto';
+          const response = await this.client.chat.completions.create(body);
+          return this.mapResponse(response);
+        }
+        throw error;
+      }
     } catch (error) {
       this.logger.error(`Groq completion error: ${(error as Error).message}`);
       throw error;
