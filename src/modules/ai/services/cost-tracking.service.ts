@@ -2,21 +2,20 @@
  * ============================================================================
  * COST TRACKING SERVICE
  * ============================================================================
- * 
+ *
  * Service untuk tracking cost penggunaan AI.
  * - Menghitung cost berdasarkan token usage
  * - Menyimpan ke database untuk analytics
- * 
+ *
  * @author IndoGold Team
  * @version 1.0.0
  * ============================================================================
  */
-
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
-import { Op } from 'sequelize';
-import { Cost, CostOperationType, ModelAI } from '../../../database/models';
+
 import { CompletionResponse, ChatMessage } from '../providers/base.provider';
+import { Cost, CostOperationType, ModelAI } from '../../../database/models';
 
 @Injectable()
 export class CostTrackingService {
@@ -34,7 +33,7 @@ export class CostTrackingService {
    * TRACK COST
    * ==========================================================================
    * Hitung dan simpan cost dari completion.
-   * 
+   *
    * @param modelAiId - Optional exact model_ai.id. If provided, lookup by PK.
    *                    If not provided, fallback to string matching by completion.model.
    * @param operationType - Type of AI operation for categorization.
@@ -72,7 +71,7 @@ export class CostTrackingService {
       // Calculate cost
       const tokenInput = completion.usage.prompt_tokens || completion.usage.input_tokens || 0;
       const tokenOutput = completion.usage.completion_tokens || completion.usage.output_tokens || 0;
-      const tokenCached = 
+      const tokenCached =
         completion.usage.prompt_tokens_details?.cached_tokens ||
         completion.usage.input_tokens_details?.cached_tokens ||
         0;
@@ -174,5 +173,4 @@ export class CostTrackingService {
       this.logger.error(`Failed to track audio cost: ${(error as Error).message}`);
     }
   }
-
 }
