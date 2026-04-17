@@ -90,24 +90,33 @@ export class XenditWebhookController {
   @ApiOperation({ summary: 'Receive Xendit payment webhook' })
   async handleWebhook(
     @Body() payload: XenditWebhookPayload,
+    @Headers('x-callback-token') callbackToken: string,
     @Headers('x-callback-signature') callbackSignature: string,
   ): Promise<{ status: string; message?: string }> {
     try {
       this.logger.log(`Received Xendit webhook: ${payload.id} - Status: ${payload.status}`);
 
-      // Verify webhook signature (wajib)
-      if (!callbackSignature) {
-        this.logger.error('Missing webhook signature header');
-        throw new UnauthorizedException('Missing webhook signature');
-      }
-
-      const isValid = this.xenditService.verifyWebhookSignature(
-        JSON.stringify(payload),
-        callbackSignature,
-      );
-      if (!isValid) {
-        this.logger.error('Invalid webhook signature');
-        throw new UnauthorizedException('Invalid signature');
+      // Verify webhook: cek x-callback-token ATAU x-callback-signature
+      if (callbackToken) {
+        // Metode 1: Token verification (selalu dikirim Xendit)
+        const isValid = this.xenditService.verifyWebhookToken(callbackToken);
+        if (!isValid) {
+          this.logger.error('Invalid webhook callback token');
+          throw new UnauthorizedException('Invalid callback token');
+        }
+      } else if (callbackSignature) {
+        // Metode 2: HMAC Signature verification
+        const isValid = this.xenditService.verifyWebhookSignature(
+          JSON.stringify(payload),
+          callbackSignature,
+        );
+        if (!isValid) {
+          this.logger.error('Invalid webhook signature');
+          throw new UnauthorizedException('Invalid signature');
+        }
+      } else {
+        this.logger.error('Missing webhook verification header');
+        throw new UnauthorizedException('Missing webhook verification');
       }
 
       // Handle based on payment status

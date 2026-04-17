@@ -303,7 +303,27 @@ export class XenditService {
    * ==========================================================================
    * VERIFY WEBHOOK SIGNATURE
    * ==========================================================================
-   * Verifikasi bahwa webhook berasal dari Xendit
+   * Verifikasi webhook token (x-callback-token)
+   */
+  verifyWebhookToken(token: string): boolean {
+    if (!this.webhookToken) {
+      this.logger.error('Webhook token not configured, rejecting request');
+      return false;
+    }
+
+    try {
+      const tokenBuffer = Buffer.from(token);
+      const expectedBuffer = Buffer.from(this.webhookToken);
+      if (tokenBuffer.length !== expectedBuffer.length) return false;
+      return require('crypto').timingSafeEqual(tokenBuffer, expectedBuffer);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * ==========================================================================
+   * Verifikasi webhook signature (x-callback-signature)
    */
   verifyWebhookSignature(payload: string, signature: string): boolean {
     if (!this.webhookToken) {
