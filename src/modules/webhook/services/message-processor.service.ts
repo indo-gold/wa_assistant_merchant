@@ -19,6 +19,8 @@
  * ============================================================================
  */
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { HttpService } from '@nestjs/axios';
 
 import { WhatsappApiService } from '../../whatsapp/services/whatsapp-api.service';
 import { AiOrchestratorService } from '../../ai/services/ai-orchestrator.service';
@@ -58,6 +60,8 @@ export class MessageProcessorService {
     private readonly visionService: VisionService,
     private readonly ktpVerificationService: KtpVerificationService,
     private readonly costTracking: CostTrackingService,
+    private readonly httpService: HttpService,
+    private readonly configService: ConfigService,
   ) {
     // Cleanup processed IDs setiap 5 menit
     setInterval(
@@ -79,12 +83,19 @@ export class MessageProcessorService {
     contact: { profile: { name: string }; wa_id: string },
   ): Promise<ProcessMessageResult> {
     try {
-      // 1. Check duplicate
+      // 1. Check duplicate (in-memory first, then DB)
       if (this.processedMessageIds.has(message.id)) {
-        this.logger.log(`Duplicate message skipped: ${message.id}`);
+        this.logger.log(`Duplicate message skipped (memory): ${message.id}`);
         return { success: true, response: 'duplicate' };
       }
       this.processedMessageIds.add(message.id);
+
+      // DB-level dedup: cek apakah wa_message_id sudah ada di chat_history
+      const existingMessage = await this.chatService.findByWaMessageId(message.id);
+      if (existingMessage) {
+        this.logger.log(`Duplicate message skipped (db): ${message.id}`);
+        return { success: true, response: 'duplicate' };
+      }
 
       // 2. Extract message data
       const { wa_id: waId, profile } = contact;
@@ -239,12 +250,43 @@ export class MessageProcessorService {
         is_llm_read: 0,
       });
 
+      // 7.1 Notify frontend: pesan user baru masuk
+      await this.notifyFrontend('new_message', {
+        user_id: user.id,
+        wa_message_id: message.id,
+        message: messageBody,
+        type: this.mapMessageType(messageType),
+        role: 'user',
+        status: 'sent',
+        timestamp: new Date().toISOString(),
+      });
+
       // 8. Check if bot should respond
       if (user.status === 'silent_bot') {
         return { success: true };
       }
 
-      // 9. Send typing indicator (tanpa message_id untuk menghindari error reply)
+      // 9. Mark ALL unread messages as read (DB + WhatsApp)
+      try {
+        // Mark pesan saat ini + semua pesan sebelumnya yang masih sent/delivered → read di DB
+        const updatedMessageIds = await this.chatService.markAllUserMessagesAsRead(user.id);
+
+        // Hit WhatsApp mark as read — cukup pesan terbaru saja
+        // WhatsApp otomatis mark semua pesan sebelumnya sebagai read
+        await this.whatsappApi.sendMessage({
+          type: 'mark_read',
+          to: waId,
+          data: { message_id: message.id },
+        });
+
+        if (updatedMessageIds.length > 0) {
+          this.logger.log(`Marked ${updatedMessageIds.length} messages as read for user ${user.id}`);
+        }
+      } catch (error) {
+        this.logger.warn(`Failed to mark as read: ${(error as Error).message}`);
+      }
+
+      // 9.1 Send typing indicator — "mengetik..." muncul di HP user
       try {
         await this.whatsappApi.sendMessage({
           type: 'typing',
@@ -254,6 +296,12 @@ export class MessageProcessorService {
       } catch (error) {
         this.logger.warn(`Failed to send typing indicator: ${(error as Error).message}`);
       }
+
+      // 9.2 Notify frontend: bot sedang memproses pesan
+      await this.notifyFrontend('typing', {
+        user_id: user.id,
+        is_typing: true,
+      });
 
       // 10. Buffer message dan process
       // Untuk AI context, gunakan processed_content jika tersedia (audio/image)
@@ -399,12 +447,29 @@ export class MessageProcessorService {
           type: MessageType.TEXT,
           role: MessageRole.ASSISTANT,
         });
+
+        // 16.1 Notify frontend: AI response baru
+        await this.notifyFrontend('new_message', {
+          user_id: user.id,
+          wa_message_id: sentMessage.messages[0]?.id,
+          message: finalResponse,
+          type: 'text',
+          role: 'assistant',
+          status: 'sent',
+          timestamp: new Date().toISOString(),
+        });
       } else {
         this.logger.log('WA already sent by tool, skipping sendMessage and saveMessage');
       }
 
       // Mark user message as LLM read
       await this.chatService.markAsLlmRead(message.id);
+
+      // Notify frontend: bot selesai memproses
+      await this.notifyFrontend('typing', {
+        user_id: user.id,
+        is_typing: false,
+      });
 
       return { success: true, response: finalResponse };
     } catch (error) {
@@ -479,6 +544,12 @@ export class MessageProcessorService {
     };
 
     await this.chatService.updateMessageStatus(messageId, statusMap[status] as any);
+
+    // Notify frontend: status pesan berubah (centang berubah realtime)
+    await this.notifyFrontend('status_update', {
+      wa_message_id: messageId,
+      status: statusMap[status],
+    });
   }
 
   /**
@@ -541,5 +612,37 @@ export class MessageProcessorService {
     });
 
     return message;
+  }
+
+  /**
+   * ==========================================================================
+   * NOTIFY FRONTEND (SSE)
+   * ==========================================================================
+   * Kirim event ke frontend SSE endpoint agar chat page update realtime.
+   */
+  private async notifyFrontend(
+    event: string,
+    data: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      const frontendUrl = this.configService.get<string>('external.sendHook');
+      const secret = this.configService.get<string>('app.internalSecret');
+
+      if (!frontendUrl || !secret) return;
+
+      await this.httpService.axiosRef.post(
+        `${frontendUrl}/api/chat/stream`,
+        { event, data },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${secret}`,
+          },
+          timeout: 5000,
+        },
+      );
+    } catch (error) {
+      this.logger.warn(`Failed to notify frontend: ${(error as Error).message}`);
+    }
   }
 }

@@ -111,8 +111,8 @@ export class Cart extends Model {
   status_order!: CartStatus;
 
   @Default(null)
-  @Column(DataType.INTEGER)
-  follow_up!: number | null;
+  @Column(DataType.DATE)
+  follow_up!: Date | null;
 
   @CreatedAt
   @Default(DataType.NOW)

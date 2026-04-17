@@ -307,8 +307,8 @@ export class XenditService {
    */
   verifyWebhookSignature(payload: string, signature: string): boolean {
     if (!this.webhookToken) {
-      this.logger.warn('Webhook token not configured, skipping verification');
-      return true;
+      this.logger.error('Webhook token not configured, rejecting request');
+      return false;
     }
 
     try {

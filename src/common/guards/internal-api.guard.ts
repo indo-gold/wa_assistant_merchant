@@ -26,6 +26,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Observable } from 'rxjs';
+import { timingSafeEqual } from 'crypto';
 
 @Injectable()
 export class InternalApiGuard implements CanActivate {
@@ -38,13 +39,19 @@ export class InternalApiGuard implements CanActivate {
     const internalSecret = request.headers['x-internal-secret'];
     const expectedSecret = this.configService.get<string>('app.internalSecret');
 
-    // Jika tidak ada secret yang dikonfigurasi, reject semua request
     if (!expectedSecret) {
       throw new UnauthorizedException('Internal API not configured');
     }
 
-    // Validate secret
-    if (!internalSecret || internalSecret !== expectedSecret) {
+    if (!internalSecret) {
+      throw new UnauthorizedException('Invalid internal API secret');
+    }
+
+    // Timing-safe comparison untuk mencegah timing attack
+    const secretBuffer = Buffer.from(String(internalSecret));
+    const expectedBuffer = Buffer.from(expectedSecret);
+
+    if (secretBuffer.length !== expectedBuffer.length || !timingSafeEqual(secretBuffer, expectedBuffer)) {
       throw new UnauthorizedException('Invalid internal API secret');
     }
 

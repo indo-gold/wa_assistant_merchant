@@ -5,6 +5,7 @@ import { LoggerModule } from 'nestjs-pino';
 import { HttpModule } from '@nestjs/axios';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
+import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 /**
  * ============================================================================
  * APP MODULE - Root Module
@@ -210,6 +211,10 @@ import { allConfigs } from './config/app.config';
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
+    },
+    {
+      provide: APP_GUARD,
+      useClass: JwtAuthGuard,
     },
   ],
 })

@@ -175,6 +175,11 @@ export class FollowupCartService {
    */
   private async sendFollowupMessage(cart: Cart & { User?: User }): Promise<void> {
     try {
+      if (!cart.User?.phone_number) {
+        this.logger.warn(`Cart ${cart.id} has no user or phone number, skipping follow-up`);
+        return;
+      }
+
       const text = `⏰ *Segera Checkout*\n\nHalo Kak 👋, pesanan Anda masih menunggu. Keranjang akan expired dalam 3 menit.\n\nSilakan konfirmasi *Lanjut* untuk mengamankan harga, ya.`;
 
       const response = await this.whatsappApi.sendMessage({
@@ -186,25 +191,29 @@ export class FollowupCartService {
         },
       });
 
-      // Save to chat history
-      await this.chatService.saveMessage({
-        user_id: cart.User.id,
-        wa_message_id: response.messages[0]?.id,
-        message: text,
-        role: MessageRole.ASSISTANT,
-        type: MessageType.TEXT,
-      });
-
-      // Update cart follow_up
+      // Mark follow_up segera setelah WA send berhasil
       await this.cartModel.update(
-        { follow_up: Math.floor(Date.now() / 1000) },
+        { follow_up: new Date() },
         { where: { id: cart.id } },
       );
 
-      this.logger.log(`Follow-up sent to ${cart.User.phone_number}`);
+      // Save to chat history (best effort)
+      try {
+        await this.chatService.saveMessage({
+          user_id: cart.User.id,
+          wa_message_id: response.messages[0]?.id,
+          message: text,
+          role: MessageRole.ASSISTANT,
+          type: MessageType.TEXT,
+        });
+      } catch (saveError) {
+        this.logger.warn(`Failed to save cart follow-up chat history: ${(saveError as Error).message}`);
+      }
+
+      this.logger.log(`Follow-up sent to ${cart.User?.phone_number}`);
     } catch (error) {
       this.logger.error(
-        `Failed to send follow-up to ${cart.User.phone_number}: ${(error as Error).message}`,
+        `Failed to send follow-up for cart ${cart.id}: ${(error as Error).message}`,
       );
     }
   }

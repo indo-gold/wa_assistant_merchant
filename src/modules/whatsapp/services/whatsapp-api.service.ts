@@ -22,6 +22,7 @@ export type WhatsAppMessageType =
   | 'document'
   | 'interactive'
   | 'typing'
+  | 'mark_read'
   | 'reply_context';
 
 export interface SendMessagePayload {
@@ -91,6 +92,20 @@ export class WhatsappApiService {
     try {
       const requestBody = this.buildRequestBody(payload);
 
+      // Typing & mark_read tidak return format WhatsAppApiResponse standar
+      if (payload.type === 'typing' || payload.type === 'mark_read') {
+        await firstValueFrom(
+          this.httpService.post(url, requestBody, {
+            headers: {
+              Authorization: `Bearer ${this.accessToken}`,
+              'Content-Type': 'application/json',
+            },
+          }),
+        );
+        this.logger.log(`${payload.type} sent to ${payload.to}`);
+        return { messaging_product: 'whatsapp', contacts: [], messages: [] };
+      }
+
       const response = await firstValueFrom(
         this.httpService.post<WhatsAppApiResponse>(url, requestBody, {
           headers: {
@@ -149,10 +164,15 @@ export class WhatsappApiService {
     const base = { messaging_product: 'whatsapp' };
 
     switch (type) {
+      case 'mark_read':
+        return {
+          ...base,
+          status: 'read',
+          message_id: data.message_id,
+        };
       case 'typing':
         return {
           ...base,
-          to,
           status: 'read',
           message_id: data.message_id,
           typing_indicator: { type: 'text' },

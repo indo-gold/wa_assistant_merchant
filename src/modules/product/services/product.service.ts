@@ -201,7 +201,7 @@ export class ProductService {
   ): Promise<{ available: boolean; stock: number; isPreOrder: boolean }> {
     const product = await this.productModel.findOne({
       where: {
-        product_id: productId,
+        id: productId,
         denomination,
       },
     });

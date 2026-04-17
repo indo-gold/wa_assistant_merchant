@@ -54,17 +54,15 @@ export class KnowledgeBaseService {
       const method = knowledgeMethod?.value || 'keywords';
 
       if (method === 'keywords') {
-        // Mode keywords: search dengan LIKE query
+        // Mode keywords: search question & answer dengan LIKE query
         for (const word of keywords) {
-          const conditions: any[] = [
-            { keyword: { [Op.like]: `%${word}%` } },
-            { question: { [Op.like]: `%${word}%` } },
-          ];
-
           const results = await this.knowledgeBaseModel.findAll({
             attributes: ['id', 'question', 'answer'],
             where: {
-              [Op.or]: conditions,
+              [Op.or]: [
+                { question: { [Op.like]: `%${word}%` } },
+                { answer: { [Op.like]: `%${word}%` } },
+              ],
             },
           });
 
@@ -76,9 +74,11 @@ export class KnowledgeBaseService {
           }
         }
       } else if (method === 'allin') {
-        // Mode allin: ambil semua knowledge base
+        // Mode allin: ambil knowledge base dengan limit agar tidak memory exhaustion
         const results = await this.knowledgeBaseModel.findAll({
           attributes: ['id', 'question', 'answer'],
+          limit: 100,
+          order: [['id', 'DESC']],
         });
 
         for (const item of results) {
@@ -111,14 +111,14 @@ export class KnowledgeBaseService {
 
   /**
    * ==========================================================================
-   * FIND BY KEYWORD
+   * FIND BY QUESTION
    * ==========================================================================
-   * Cari knowledge base by exact keyword.
+   * Cari knowledge base by question text.
    */
-  async findByKeyword(keyword: string): Promise<KnowledgeBase[]> {
+  async findByQuestion(query: string): Promise<KnowledgeBase[]> {
     return this.knowledgeBaseModel.findAll({
       where: {
-        keyword: { [Op.like]: `%${keyword}%` },
+        question: { [Op.like]: `%${query}%` },
       },
     });
   }

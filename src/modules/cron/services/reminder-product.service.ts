@@ -104,8 +104,8 @@ export class ReminderProductService {
       const user = reminder.user;
       const product = reminder.product;
 
-      if (!user || !product) {
-        this.logger.warn(`Skipping reminder ${reminder.id}: missing user or product data`);
+      if (!user?.phone_number || !product) {
+        this.logger.warn(`Skipping reminder ${reminder.id}: missing user, phone_number, or product data`);
         return;
       }
 
@@ -130,17 +130,21 @@ Terima kasih!`;
         },
       });
 
-      // Save to chat history
-      await this.chatService.saveMessage({
-        user_id: reminder.user_id,
-        wa_message_id: response.messages[0]?.id,
-        message,
-        role: MessageRole.ASSISTANT,
-        type: MessageType.TEXT,
-      });
+      // Mark followup segera setelah WA send berhasil agar tidak di-retry/double send
+      await reminder.update({ followup: new Date() });
 
-      // Update reminder followup
-      await reminder.update({ followup: 1 });
+      // Save to chat history (best effort — jika gagal, pesan tetap terkirim)
+      try {
+        await this.chatService.saveMessage({
+          user_id: reminder.user_id,
+          wa_message_id: response.messages[0]?.id,
+          message,
+          role: MessageRole.ASSISTANT,
+          type: MessageType.TEXT,
+        });
+      } catch (saveError) {
+        this.logger.warn(`Failed to save reminder chat history: ${(saveError as Error).message}`);
+      }
 
       this.logger.log(`Reminder sent to ${user.phone_number} for ${productList}`);
     } catch (error) {

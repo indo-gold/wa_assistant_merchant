@@ -103,6 +103,11 @@ export class FollowupOrderService {
    */
   private async sendFollowupMessage(order: Order & { User?: User }): Promise<void> {
     try {
+      if (!order.User?.phone_number) {
+        this.logger.warn(`Order ${order.id} has no user or phone number, skipping follow-up`);
+        return;
+      }
+
       const text = `Hai Kak 👋, kami lihat Kakak belum menyelesaikan pesanan di keranjang.
 Yuk lanjutkan proses checkout sekarang biar pesanan Kakak bisa segera kami siapkan 😊
 
@@ -117,25 +122,29 @@ Kalau ada yang ingin ditanyakan sebelum checkout, boleh banget chat kami di sini
         },
       });
 
-      // Save to chat history
-      await this.chatService.saveMessage({
-        user_id: order.User.id,
-        wa_message_id: response.messages[0]?.id,
-        message: text,
-        role: MessageRole.ASSISTANT,
-        type: MessageType.TEXT,
-      });
-
-      // Update order follow_up
+      // Mark follow_up segera setelah WA send berhasil
       await this.orderModel.update(
-        { follow_up: Math.floor(Date.now() / 1000) },
+        { follow_up: new Date() },
         { where: { id: order.id } },
       );
 
-      this.logger.log(`Follow-up sent to ${order.User.phone_number}`);
+      // Save to chat history (best effort)
+      try {
+        await this.chatService.saveMessage({
+          user_id: order.User.id,
+          wa_message_id: response.messages[0]?.id,
+          message: text,
+          role: MessageRole.ASSISTANT,
+          type: MessageType.TEXT,
+        });
+      } catch (saveError) {
+        this.logger.warn(`Failed to save order follow-up chat history: ${(saveError as Error).message}`);
+      }
+
+      this.logger.log(`Follow-up sent to ${order.User?.phone_number}`);
     } catch (error) {
       this.logger.error(
-        `Failed to send follow-up to ${order.User.phone_number}: ${(error as Error).message}`,
+        `Failed to send follow-up for order ${order.id}: ${(error as Error).message}`,
       );
     }
   }

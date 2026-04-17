@@ -540,18 +540,31 @@ ${agent?.instruction || ''}`,
 
       try {
         const normalizedQuery = query.replace(/\s+/g, ' ').trim().toLowerCase();
+
+        // Whitelist: hanya SELECT yang diizinkan
         const isSelectQuery =
           normalizedQuery.startsWith('select') ||
           normalizedQuery.startsWith('(select') ||
           normalizedQuery.startsWith('with') ||
           normalizedQuery.startsWith('(with');
 
-        if (isSelectQuery) {
+        // Blacklist: block DML/DDL/dangerous statements
+        const dangerousPatterns = /\b(insert|update|delete|drop|alter|create|truncate|exec|execute|grant|revoke|union\s+select\s+.*from\s+(?!products)|(into\s+outfile|into\s+dumpfile)|load_file|benchmark|sleep|information_schema|mysql\.|sys\.)\b/i;
+        const hasDangerous = dangerousPatterns.test(normalizedQuery);
+
+        // Whitelist: hanya boleh akses tabel products
+        const allowedTables = /\bfrom\s+(?:`?products`?|`?products`?\s)/i;
+        const accessesAllowedTable = allowedTables.test(query);
+
+        if (isSelectQuery && !hasDangerous && accessesAllowedTable) {
           this.logger.log(`Executing gold price query: ${query.substring(0, 200)}...`);
           const [queryResults] = (await this.productModel.sequelize?.query(query)) || [[]];
           results = queryResults as Product[];
           this.logger.log(`Gold price query returned ${results.length} rows`);
         } else {
+          if (hasDangerous) {
+            this.logger.error(`Blocked dangerous SQL query: ${query.substring(0, 200)}`);
+          }
           throw new Error('Not a valid SQL query');
         }
       } catch (error) {

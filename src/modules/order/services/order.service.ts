@@ -1,4 +1,5 @@
 import { InjectModel, InjectConnection } from '@nestjs/sequelize';
+import { randomInt } from 'crypto';
 /**
  * ============================================================================
  * ORDER SERVICE
@@ -138,11 +139,11 @@ export class OrderService {
    * Generate kode OTP yang unik (tidak ada di database dengan status ACTIVE)
    */
   private async generateUniqueOtpCode(): Promise<string> {
-    const maxAttempts = 10;
+    const maxAttempts = 20;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      // Generate 6 digit random code
-      const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+      // Generate 6 digit random code (crypto-safe)
+      const otpCode = randomInt(100000, 999999).toString();
 
       // Cek apakah kode ini sudah dipakai oleh OTP aktif lain
       const existing = await this.orderOtpModel.findOne({
@@ -152,7 +153,6 @@ export class OrderService {
         },
       });
 
-      // Jika tidak ada yang pakai, return kode ini
       if (!existing) {
         return otpCode;
       }
@@ -162,10 +162,9 @@ export class OrderService {
       );
     }
 
-    // Fallback: tambahkan timestamp untuk uniqueness (sangat jarang terjadi)
-    const timestamp = Date.now().toString().slice(-3);
-    const prefix = Math.floor(100 + Math.random() * 900).toString();
-    return prefix + timestamp;
+    // Fallback: 8 digit crypto-random (sangat jarang terjadi)
+    this.logger.error('OTP collision exceeded max attempts, using 8-digit fallback');
+    return randomInt(10000000, 99999999).toString();
   }
 
   /**
@@ -442,7 +441,20 @@ export class OrderService {
         };
       }
 
-      // 3. Update payment status
+      // 3. Validasi amount — pastikan sesuai dengan yang diexpect
+      const paidAmount = Number(payload.paid_amount || payload.amount);
+      if (paidAmount && payment.amount && Math.abs(paidAmount - payment.amount) > 1) {
+        await transaction.rollback();
+        this.logger.error(
+          `Payment amount mismatch for ${xenditInvoiceId}: expected ${payment.amount}, got ${paidAmount}`,
+        );
+        return {
+          success: false,
+          message: `Payment amount mismatch: expected ${payment.amount}, received ${paidAmount}`,
+        };
+      }
+
+      // 4. Update payment status
       const paidAt = payload.paid_at ? new Date(payload.paid_at as string) : new Date();
 
       await payment.update(

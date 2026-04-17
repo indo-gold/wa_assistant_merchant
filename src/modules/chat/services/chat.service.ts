@@ -78,6 +78,17 @@ export class ChatService {
    * ==========================================================================
    * GET CONVERSATION HISTORY
    * ==========================================================================
+   * Cek apakah pesan dengan wa_message_id sudah ada di DB (untuk dedup).
+   */
+  async findByWaMessageId(waMessageId: string): Promise<ChatHistory | null> {
+    return this.chatHistoryModel.findOne({
+      where: { wa_message_id: waMessageId },
+      attributes: ['id'],
+    });
+  }
+
+  /**
+   * ==========================================================================
    * Ambil conversation history untuk LLM context.
    * Default: 5 pesan terakhir.
    */
@@ -115,15 +126,65 @@ export class ChatService {
     waMessageId: string,
     status: MessageStatus,
   ): Promise<void> {
+    // Status hanya boleh maju (sent → delivered → read), tidak boleh mundur.
+    // Failed bisa dari status apapun, tapi tidak bisa diubah lagi setelah failed.
+    const allowedPreviousStatus: Record<string, string[]> = {
+      [MessageStatus.DELIVERED]: [MessageStatus.SENT],
+      [MessageStatus.READ]: [MessageStatus.SENT, MessageStatus.DELIVERED],
+      [MessageStatus.FAILED]: [MessageStatus.SENT, MessageStatus.DELIVERED, MessageStatus.READ],
+    };
+
+    const allowed = allowedPreviousStatus[status];
+    if (!allowed) return; // sent tidak perlu update (sudah default)
+
     await this.chatHistoryModel.update(
       { status },
       {
         where: {
           wa_message_id: waMessageId,
-          status: { [Op.ne]: MessageStatus.FAILED },
+          status: { [Op.in]: allowed },
         },
       },
     );
+  }
+
+  /**
+   * ==========================================================================
+   * MARK ALL USER MESSAGES AS READ
+   * ==========================================================================
+   * Mark semua pesan user (role=user) yang belum read menjadi read.
+   * Return wa_message_id pesan yang di-update (untuk hit WhatsApp API).
+   */
+  async markAllUserMessagesAsRead(
+    userId: number,
+  ): Promise<string[]> {
+    // Ambil wa_message_id pesan yang akan di-update
+    const unreadMessages = await this.chatHistoryModel.findAll({
+      attributes: ['wa_message_id'],
+      where: {
+        user_id: userId,
+        role: MessageRole.USER,
+        status: { [Op.in]: [MessageStatus.SENT, MessageStatus.DELIVERED] },
+        wa_message_id: { [Op.ne]: null },
+      },
+      order: [['id', 'DESC']],
+    });
+
+    if (unreadMessages.length === 0) return [];
+
+    // Update semua jadi read
+    await this.chatHistoryModel.update(
+      { status: MessageStatus.READ },
+      {
+        where: {
+          user_id: userId,
+          role: MessageRole.USER,
+          status: { [Op.in]: [MessageStatus.SENT, MessageStatus.DELIVERED] },
+        },
+      },
+    );
+
+    return unreadMessages.map(m => m.wa_message_id).filter(Boolean) as string[];
   }
 
   /**
@@ -180,6 +241,15 @@ export class ChatService {
           reject,
         };
         this.messageBuffer.set(userId, entry);
+      } else {
+        // Resolve promise sebelumnya dengan combined message sejauh ini
+        // agar caller sebelumnya tidak hang
+        const previousResolve = entry.resolve;
+        entry.resolve = resolve;
+        entry.reject = reject;
+        // Resolve caller sebelumnya — mereka akan dapat combined message yang sama nanti
+        // via processMessage yang akan di-skip (dedup)
+        previousResolve(entry.messages.join('\n'));
       }
 
       // Add message to buffer
@@ -192,9 +262,12 @@ export class ChatService {
 
       // Set new timer
       entry.timer = setTimeout(() => {
-        const combinedMessage = entry!.messages.join('\n');
-        this.messageBuffer.delete(userId);
-        resolve(combinedMessage);
+        const currentEntry = this.messageBuffer.get(userId);
+        if (currentEntry) {
+          const combinedMessage = currentEntry.messages.join('\n');
+          this.messageBuffer.delete(userId);
+          currentEntry.resolve(combinedMessage);
+        }
       }, this.MESSAGE_IDLE_TIMEOUT);
     });
   }
@@ -247,7 +320,7 @@ export class ChatService {
    * ==========================================================================
    * Cari cart berdasarkan wa_message_id (untuk handle tombol reply).
    */
-  async findByWaMessageId(waMessageId: string): Promise<any | null> {
+  async findCartByWaMessageId(waMessageId: string): Promise<any | null> {
     // Import Cart model dynamically to avoid circular dependency
     const { Cart } = await import('../../../database/models');
     return Cart.findOne({

@@ -173,8 +173,12 @@ export class AiOrchestratorService {
         }
       }
 
-      // Call AI
-      const completion = await modelConfig.provider.createCompletion(request);
+      // Call AI dengan fallback (hybrid → main)
+      const { completion, modelConfig: usedConfig } = await this.callWithFallback(
+        agent,
+        modelConfig,
+        (config) => ({ ...request, model: config.modelName }),
+      );
 
       // Track cost
       await this.costTracking.trackCost(
@@ -184,7 +188,7 @@ export class AiOrchestratorService {
         context.waMessageId,
         messagesWithInstruction,
         Date.now() - startTime,
-        modelConfig.modelId,
+        usedConfig.modelId,
         CostOperationType.CHAT_COMPLETION,
       );
 
@@ -203,16 +207,16 @@ export class AiOrchestratorService {
             content: completion.choices[0]?.message?.content || null,
             tool_calls: toolCalls,
           },
-          model: modelConfig.modelName,
-          provider: modelConfig.studioName,
+          model: usedConfig.modelName,
+          provider: usedConfig.studioName,
           executionTime: Date.now() - startTime,
         };
       }
 
       return {
         content: completion.choices[0]?.message?.content || '',
-        model: modelConfig.modelName,
-        provider: modelConfig.studioName,
+        model: usedConfig.modelName,
+        provider: usedConfig.studioName,
         executionTime: Date.now() - startTime,
       };
     } catch (error) {
@@ -286,7 +290,12 @@ export class AiOrchestratorService {
         store: false,
       };
 
-      const completion = await modelConfig.provider.createCompletion(request);
+      // Call AI dengan fallback (hybrid → main)
+      const { completion, modelConfig: usedConfig } = await this.callWithFallback(
+        agent,
+        modelConfig,
+        (config) => ({ ...request, model: config.modelName }),
+      );
 
       // Track cost
       await this.costTracking.trackCost(
@@ -296,14 +305,14 @@ export class AiOrchestratorService {
         context.waMessageId,
         conversationHistory,
         Date.now() - startTime,
-        modelConfig.modelId,
+        usedConfig.modelId,
         CostOperationType.CHAT_COMPLETION,
       );
 
       return {
         content: completion.choices[0]?.message?.content || '',
-        model: modelConfig.modelName,
-        provider: modelConfig.studioName,
+        model: usedConfig.modelName,
+        provider: usedConfig.studioName,
         executionTime: Date.now() - startTime,
       };
     } catch (error) {
@@ -348,7 +357,15 @@ export class AiOrchestratorService {
       }
     }
 
-    // 2. Fallback ke main model dengan studio utama (is_used='1')
+    // 2. Fallback ke main model
+    return this.resolveMainModelConfig(agent);
+  }
+
+  /**
+   * Resolve main model config (non-hybrid).
+   * Dipisah agar bisa dipanggil langsung saat fallback runtime.
+   */
+  private async resolveMainModelConfig(agent: AgentAI): Promise<ResolvedModelConfig> {
     const mainModel = await this.modelAiModel.findOne({
       where: { id: agent.model_id },
       include: [
@@ -378,6 +395,43 @@ export class AiOrchestratorService {
       modelId: mainModel.id,
       provider: this.providerFactory.getProvider(providerType),
     };
+  }
+
+  /**
+   * Call AI dengan fallback: jika hybrid model gagal, coba main model.
+   */
+  private async callWithFallback(
+    agent: AgentAI,
+    primaryConfig: ResolvedModelConfig,
+    buildRequest: (config: ResolvedModelConfig) => CompletionRequest,
+  ): Promise<{ completion: any; modelConfig: ResolvedModelConfig }> {
+    try {
+      const request = buildRequest(primaryConfig);
+      const completion = await primaryConfig.provider.createCompletion(request);
+      return { completion, modelConfig: primaryConfig };
+    } catch (error) {
+      // Jika ada hybrid model dan gagal, fallback ke main model
+      if (agent.hybrid_model_id && agent.hybrid_model_id !== agent.model_id) {
+        this.logger.warn(
+          `Hybrid model ${primaryConfig.modelName} failed: ${(error as Error).message}. Falling back to main model...`,
+        );
+
+        try {
+          const fallbackConfig = await this.resolveMainModelConfig(agent);
+          const request = buildRequest(fallbackConfig);
+          const completion = await fallbackConfig.provider.createCompletion(request);
+          this.logger.log(`Fallback to main model ${fallbackConfig.modelName} succeeded`);
+          return { completion, modelConfig: fallbackConfig };
+        } catch (fallbackError) {
+          this.logger.error(
+            `Fallback model also failed: ${(fallbackError as Error).message}`,
+          );
+          throw fallbackError;
+        }
+      }
+
+      throw error;
+    }
   }
 
   /**

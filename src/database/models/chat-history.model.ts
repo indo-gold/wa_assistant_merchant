@@ -49,11 +49,13 @@ export enum MessageType {
   TEXT = 'text',
   INTERACTIVE = 'interactive',
   IMAGE = 'image',
-  STICKER = 'sticker',
+  STICKER = 'striker',
   DOCUMENT = 'document',
   AUDIO = 'audio',
   VIDEO = 'video',
   ORDER = 'order',
+  TEMPLATE = 'template',
+  REACTION = 'reaction',
 }
 
 /**
@@ -162,7 +164,7 @@ export class ChatHistory extends Model {
 
   /**
    * ID admin jika percakapan diambil alih admin
-   *
+   */
   @Default(null)
   @Column(DataType.INTEGER)
   admin_id!: number | null;

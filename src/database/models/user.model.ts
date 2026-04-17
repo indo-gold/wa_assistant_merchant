@@ -98,6 +98,14 @@ export class User extends Model {
   status!: UserStatus;
 
   /**
+   * Pin status user
+   */
+  @AllowNull(false)
+  @Default('inactive')
+  @Column(DataType.ENUM('active', 'inactive'))
+  pin!: 'active' | 'inactive';
+
+  /**
    * Timestamp pembuatan record
    */
   @CreatedAt

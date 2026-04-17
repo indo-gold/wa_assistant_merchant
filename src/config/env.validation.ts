@@ -40,7 +40,7 @@ export const envSchema = z.object({
   // ============================================================================
   SECRET_NAME: z.string().default('WA_ASSISTANT'),
   SECRET_HASHED_KEY: z.string(),
-  JWT_SECRET: z.string().default('ini_rahasia_indragold'),
+  JWT_SECRET: z.string().min(32, 'JWT_SECRET must be at least 32 characters'),
   JWT_EXPIRES_IN: z.string().default('1h'),
   VERIFY_TOKEN: z.string(),
   INTERNAL_SECRET: z.string(),
@@ -115,6 +115,7 @@ export const envSchema = z.object({
   // EXTERNAL INTEGRATIONS
   // ============================================================================
   SEND_HOOK: z.string().url().default('http://localhost:3001'),
+  CORS_ORIGINS: z.string().default('http://localhost:3001'),
   GOOGLE_SHEET_URL: z.string().url().optional(),
   GOOGLE_APPLICATION_CREDENTIALS: z.string().optional(),
 

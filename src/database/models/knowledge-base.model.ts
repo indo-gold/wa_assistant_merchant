@@ -2,11 +2,11 @@
  * ============================================================================
  * KNOWLEDGE BASE MODEL
  * ============================================================================
- * 
+ *
  * Model untuk menyimpan knowledge base AI.
- * 
+ *
  * @author IndoGold Team
- * @version 1.0.0
+ * @version 1.1.0
  * ============================================================================
  */
 
@@ -18,6 +18,7 @@ import {
   PrimaryKey,
   AutoIncrement,
   AllowNull,
+  Default,
 } from 'sequelize-typescript';
 
 @Table({
@@ -32,23 +33,41 @@ export class KnowledgeBase extends Model {
   @Column(DataType.INTEGER)
   id!: number;
 
-  @AllowNull(false)
-  @Column(DataType.STRING)
-  keyword!: string;
+  @AllowNull(true)
+  @Column(DataType.STRING(255))
+  title!: string | null;
 
-  @AllowNull(false)
+  @AllowNull(true)
+  @Column(DataType.INTEGER)
+  category_id!: number | null;
+
+  @AllowNull(true)
   @Column(DataType.TEXT)
-  question!: string;
+  question!: string | null;
 
-  @AllowNull(false)
+  @AllowNull(true)
   @Column(DataType.TEXT)
-  answer!: string;
+  answer!: string | null;
 
-  @AllowNull(false)
+  @Default('active')
+  @Column(DataType.ENUM('active', 'inactive'))
+  status!: 'active' | 'inactive';
+
+  @AllowNull(true)
+  @Column(DataType.INTEGER)
+  modified_by!: number | null;
+
   @Column(DataType.DATE)
   created_at!: Date;
 
-  @AllowNull(false)
   @Column(DataType.DATE)
   updated_at!: Date;
+
+  @Default(0)
+  @Column(DataType.INTEGER)
+  views!: number;
+
+  @Default(0)
+  @Column(DataType.TINYINT)
+  is_default!: number;
 }

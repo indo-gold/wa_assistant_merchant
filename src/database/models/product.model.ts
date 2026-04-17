@@ -33,8 +33,8 @@ import { Promo } from './promo.model';
   timestamps: true,
   createdAt: 'created_at',
   updatedAt: 'updated_at',
-  charset: 'latin1',
-  collate: 'latin1_swedish_ci',
+  charset: 'utf8mb4',
+  collate: 'utf8mb4_unicode_ci',
 })
 export class Product extends Model {
   @PrimaryKey
@@ -47,9 +47,9 @@ export class Product extends Model {
   @Column(DataType.STRING(50))
   product_name!: string;
 
-  @AllowNull(false)
-  @Column(DataType.STRING(50))
-  variant_name!: string;
+  @AllowNull(true)
+  @Column(DataType.STRING(255))
+  variant_name!: string | null;
 
   @AllowNull(false)
   @Column(DataType.FLOAT)

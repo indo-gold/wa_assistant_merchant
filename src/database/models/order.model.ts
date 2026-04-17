@@ -114,12 +114,13 @@ export class Order extends Model {
    * Status pembayaran
    * - pending: Menunggu pembayaran
    * - paid: Sudah dibayar
-   * - failed: Gagal/expired
+   * - expired: Timeout pembayaran
+   * - failed: Gagal
    * - cancelled: Dibatalkan
    */
   @Default('pending')
-  @Column(DataType.ENUM('pending', 'paid', 'failed', 'cancelled'))
-  payment_status!: 'pending' | 'paid' | 'failed' | 'cancelled';
+  @Column(DataType.ENUM('pending', 'paid', 'expired', 'failed', 'cancelled'))
+  payment_status!: 'pending' | 'paid' | 'expired' | 'failed' | 'cancelled';
 
   /**
    * Status apakah OTP sudah diverifikasi

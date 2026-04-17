@@ -148,6 +148,34 @@ export class CartService {
 
   /**
    * ==========================================================================
+   * VALIDATE PRICE LOCK (Atomic)
+   * ==========================================================================
+   * Validasi bahwa cart masih PENDING dan price lock belum expired.
+   * Mencegah race condition antara validasi dan payment creation.
+   */
+  async validatePriceLock(cartId: number): Promise<{ valid: boolean; message?: string }> {
+    const lockCutoff = new Date(Date.now() - this.PRICE_LOCK_MINUTES * 60 * 1000);
+
+    const cart = await this.cartModel.findOne({
+      where: {
+        id: cartId,
+        status_order: CartStatus.PENDING,
+        price_locked_at: { [Op.gte]: lockCutoff },
+      },
+    });
+
+    if (!cart) {
+      return {
+        valid: false,
+        message: 'Harga sudah berubah atau keranjang expired. Silakan buat pesanan baru.',
+      };
+    }
+
+    return { valid: true };
+  }
+
+  /**
+   * ==========================================================================
    * UPDATE CART STATUS
    * ==========================================================================
    */
@@ -198,7 +226,7 @@ export class CartService {
    */
   async updateFollowUp(cartId: number): Promise<boolean> {
     const [updated] = await this.cartModel.update(
-      { follow_up: Math.floor(Date.now() / 1000) },
+      { follow_up: new Date() },
       { where: { id: cartId } },
     );
 
@@ -231,5 +259,4 @@ export class CartService {
       include: ['user'],
     });
   }
-
-  }
+}

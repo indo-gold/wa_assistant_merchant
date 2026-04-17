@@ -55,8 +55,12 @@ export class ReminderProducts extends Model {
   denomination!: number;
 
   @AllowNull(true)
-  @Column(DataType.INTEGER)
-  followup?: number;
+  @Column(DataType.DATE)
+  followup?: Date | null;
+
+  @AllowNull(false)
+  @Column(DataType.ENUM('user request reminder', 'failed order'))
+  from!: 'user request reminder' | 'failed order';
 
   @ForeignKey(() => User)
   @AllowNull(false)
@@ -67,9 +71,9 @@ export class ReminderProducts extends Model {
   @Column(DataType.STRING)
   wa_message_id?: string;
 
-  @AllowNull(true)
+  @AllowNull(false)
   @Column(DataType.DATE)
-  created_at?: Date;
+  created_at!: Date;
 
   // Relationships
   @BelongsTo(() => User, 'user_id')

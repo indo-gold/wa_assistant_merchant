@@ -95,16 +95,19 @@ export class XenditWebhookController {
     try {
       this.logger.log(`Received Xendit webhook: ${payload.id} - Status: ${payload.status}`);
 
-      // Verify webhook signature if available
-      if (callbackSignature) {
-        const isValid = this.xenditService.verifyWebhookSignature(
-          JSON.stringify(payload),
-          callbackSignature,
-        );
-        if (!isValid) {
-          this.logger.error('Invalid webhook signature');
-          throw new UnauthorizedException('Invalid signature');
-        }
+      // Verify webhook signature (wajib)
+      if (!callbackSignature) {
+        this.logger.error('Missing webhook signature header');
+        throw new UnauthorizedException('Missing webhook signature');
+      }
+
+      const isValid = this.xenditService.verifyWebhookSignature(
+        JSON.stringify(payload),
+        callbackSignature,
+      );
+      if (!isValid) {
+        this.logger.error('Invalid webhook signature');
+        throw new UnauthorizedException('Invalid signature');
       }
 
       // Handle based on payment status

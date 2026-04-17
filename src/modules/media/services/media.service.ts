@@ -74,11 +74,18 @@ export class MediaService {
       const typeDir = path.join(this.mediaDir, typeCategory);
       this.ensureDirectoryExists(typeDir);
 
-      // Generate unique filename
+      // Generate unique filename — sanitize originalName untuk cegah path traversal
       const originalName = file.filename;
+      const sanitizedName = path.basename(originalName).replace(/[^a-zA-Z0-9._-]/g, '_');
       const uniqueId = uuidv4();
-      const filename = `${uniqueId}-${originalName}`;
+      const filename = `${uniqueId}-${sanitizedName}`;
       const filepath = path.join(typeDir, filename);
+
+      // Verify filepath masih dalam typeDir (extra safety)
+      const resolvedPath = path.resolve(filepath);
+      if (!resolvedPath.startsWith(path.resolve(typeDir))) {
+        throw new BadRequestException('Invalid filename');
+      }
 
       // Save file
       await this.saveFile(file, filepath);

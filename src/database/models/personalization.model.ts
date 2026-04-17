@@ -35,8 +35,8 @@ export class Personalization extends Model {
   id!: number;
 
   @AllowNull(false)
-  @Column(DataType.STRING(50))
-  user_id!: string;
+  @Column(DataType.INTEGER.UNSIGNED)
+  user_id!: number;
 
   @AllowNull(true)
   @Column(DataType.TEXT)

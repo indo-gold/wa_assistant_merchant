@@ -56,32 +56,30 @@ export class UserService {
    * Digunakan saat menerima pesan WhatsApp.
    */
   async findOrCreate(phoneNumber: string, name: string): Promise<UserWithInfo> {
-    let user = await this.userModel.findOne({
+    // Atomic findOrCreate — mencegah race condition saat 2 webhook masuk bersamaan
+    const [user, created] = await this.userModel.findOrCreate({
       where: { phone_number: phoneNumber },
+      defaults: {
+        name: name || 'Anonymous',
+        phone_number: phoneNumber,
+        status: UserStatus.ACTIVE,
+      },
     });
 
-    if (user) {
-      // Update name jika berubah
-      if (user.name !== name) {
-        await user.update({ name });
-      }
-
-      // Hitung hari sejak pesan terakhir
-      const lastMessageDays = await this.getDaysSinceLastMessage(user.id);
-      
-      return { ...user.toJSON(), isNew: false, lastMessageDays };
+    if (created) {
+      this.logger.log(`New user created: ${phoneNumber} (${name})`);
+      return { ...user.toJSON(), isNew: true };
     }
 
-    // Create new user
-    user = await this.userModel.create({
-      name: name || 'Anonymous',
-      phone_number: phoneNumber,
-      status: UserStatus.ACTIVE,
-    });
+    // Update name jika berubah
+    if (user.name !== name && name) {
+      await user.update({ name });
+    }
 
-    this.logger.log(`New user created: ${phoneNumber} (${name})`);
-    
-    return { ...user.toJSON(), isNew: true };
+    // Hitung hari sejak pesan terakhir
+    const lastMessageDays = await this.getDaysSinceLastMessage(user.id);
+
+    return { ...user.toJSON(), isNew: false, lastMessageDays };
   }
 
   /**

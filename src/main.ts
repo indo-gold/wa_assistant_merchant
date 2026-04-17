@@ -42,6 +42,17 @@ async function bootstrap(): Promise<void> {
   const fastifyAdapter = new FastifyAdapter({
     logger: false, // Disable default Fastify logger, menggunakan Pino
     trustProxy: true,
+    bodyLimit: 1048576, // 1MB max JSON body
+  });
+
+  // Simpan raw body untuk webhook signature verification
+  fastifyAdapter.getInstance().addHook('onRequest', (request: any, _reply: any, done: () => void) => {
+    const chunks: Buffer[] = [];
+    request.raw.on('data', (chunk: Buffer) => chunks.push(chunk));
+    request.raw.on('end', () => {
+      (request as any).rawBody = Buffer.concat(chunks);
+    });
+    done();
   });
 
   // ============================================================================
@@ -63,9 +74,13 @@ async function bootstrap(): Promise<void> {
     },
   });
 
-  // Register CORS plugin
+  // Register CORS plugin - origins dari env var
+  const corsOrigins = (process.env.CORS_ORIGINS || 'http://localhost:3001')
+    .split(',')
+    .map(origin => origin.trim());
+
   await app.register(fastifyCors as any, {
-    origin: ['http://localhost:3001'], // Sesuaikan dengan frontend origin
+    origin: corsOrigins,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-internal-secret'],
     credentials: true,
